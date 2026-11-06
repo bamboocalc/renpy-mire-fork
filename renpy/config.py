@@ -99,6 +99,9 @@ image_cache_size = None
 # The size of the image cache, in megabytes.
 image_cache_size_mb = 400
 
+# Additional imported-model data retained after leaving prediction; textures have their own cache.
+gltf_model_cache_size_mb = 0
+
 # The number of threads to use for parallel image decoding during preloading.
 # Set to 0 for automatic (based on CPU count, capped as below and always leaving
 # at least 2 free) or 1 to disable parallel decoding.

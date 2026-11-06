@@ -1709,6 +1709,18 @@ Showing Images
     can be repeatedly loaded, hurting performance. If not None,
     :var:`config.image_cache_size` is used instead of this variable.
 
+.. var:: config.gltf_model_cache_size_mb = 0
+
+    The budget, in megabytes, for imported GLTF model data retained after a
+    model leaves prediction. Zero preserves the previous behavior of discarding
+    models as soon as they leave prediction. When enabled, the least recently
+    used inactive models are discarded until the retained data fits the budget.
+
+    Models being shown or predicted are excluded from this budget. The size
+    counts native mesh buffers and compressed embedded images, rather than
+    Python object overhead. Decoded images and GPU textures use the separate
+    image cache controlled by :var:`config.image_cache_size_mb`.
+
 .. var:: config.keep_running_transform = True
 
     If True, showing an image without supplying a transform or ATL

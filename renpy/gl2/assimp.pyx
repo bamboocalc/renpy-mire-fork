@@ -20,6 +20,7 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
+import collections
 import functools
 import threading
 
@@ -30,6 +31,7 @@ from renpy.pygame.sdl cimport SDL_IOStream
 
 from assimpapi cimport (
     aiProcessPreset_TargetRealtime_Quality,
+    aiProcess_CalcTangentSpace,
     aiProcess_FlipUVs,
     aiProcess_FlipWindingOrder,
 
@@ -85,7 +87,7 @@ from assimpapi cimport (
 )
 
 cdef extern from "assimpio.h":
-    const aiScene *assimpio_import(const char *filename, unsigned int flags)
+    const aiScene *assimpio_import(const char *filename, unsigned int flags) noexcept nogil
 
 from typing import Callable, Iterable
 
@@ -127,7 +129,9 @@ TEXTURE_TYPES = {
 
 
 def free_memory():
-    cache.clear()
+    with loader_lock:
+        with cache_lock:
+            cache.clear()
 
 
 class MeshInfo:
@@ -202,7 +206,11 @@ class ModelData:
     mesh_info: list[MeshInfo]
     "A list of MeshInfo objects used by the blit_info objects."
 
+    memory_size: int
+    "Native mesh buffers and compressed embedded images, in bytes; excludes image-cache textures."
+
     def __init__(self):
+        self.memory_size = 0
         self.embedded_textures = { }
         self.blit_info = [ ]
 
@@ -337,8 +345,11 @@ class ModelData:
             log(f"    uniform {uniform_type} {u};{comment}")
 
 
-cache: dict[GLTFModel, ModelData] = { }
-"Caches the models that have been loaded."
+cache: collections.OrderedDict[GLTFModel, ModelData] = collections.OrderedDict()
+"Imported models, ordered from least to most recently loaded or rendered."
+
+cache_lock = threading.Lock()
+"Protects cache membership and recency without waiting for native imports."
 
 predicted: set[GLTFModel]|None = None
 "The set of models that are predicted to be loaded."
@@ -400,9 +411,14 @@ cdef class Loader:
 
         # Load the scene.
         filename_bytes = filename.encode()
-        self.scene = assimpio_import(
-            filename_bytes,
-            aiProcessPreset_TargetRealtime_Quality | aiProcess_FlipUVs | aiProcess_FlipWindingOrder)
+        cdef const char *filename_c = filename_bytes
+        cdef unsigned int flags = aiProcessPreset_TargetRealtime_Quality | aiProcess_FlipUVs | aiProcess_FlipWindingOrder
+        if not tangents:
+            flags &= ~aiProcess_CalcTangentSpace
+
+        # File callbacks reacquire the GIL; native import and postprocessing need not hold it.
+        with nogil:
+            self.scene = assimpio_import(filename_c, flags)
 
         if not self.scene:
             if error := assimp_get_error():
@@ -458,6 +474,7 @@ cdef class Loader:
             if texture.mHeight == 0:
                 texbytes = <char *>texture.pcData
                 data = texbytes[:texture.mWidth]
+                self.model_data.memory_size += len(data)
 
                 filename = key + "." + format
 
@@ -704,6 +721,10 @@ cdef class Loader:
         m.attribute_version = 1
         m.triangle_version = 1
 
+        self.model_data.memory_size += (
+            mesh.mNumVertices * (sizeof(Point3) + stride * sizeof(float))
+            + mesh.mNumFaces * 3 * sizeof(unsigned int))
+
         info = MeshInfo(
             self,
             m,
@@ -741,7 +762,7 @@ class GLTFModel(Displayable):
         Either a string or tuple of strings, giving the name of the shader to use.
 
     `tangents`
-        If True, tangents will be included in the mesh.
+        If True, tangents are generated when needed and included in the mesh. Otherwise, tangent generation is skipped.
 
     `zoom`
         A zoom factor that will be applied to the model. Many models naturally use the range -1 to 1, and so this
@@ -828,26 +849,34 @@ class GLTFModel(Displayable):
         Loads the AssimpModel, including its meshes and textures.
         """
 
-        model_data = cache.get(self)
+        with cache_lock:
+            model_data = cache.get(self)
+            if model_data is not None:
+                cache.move_to_end(self)
+                return model_data
 
-        if model_data is None:
+        with loader_lock:
+            # Recheck under the import lock, without blocking cache hits on that lock.
+            with cache_lock:
+                model_data = cache.get(self)
+                if model_data is not None:
+                    cache.move_to_end(self)
+                    return model_data
 
-            with loader_lock:
-                model_data = ModelData()
-
-                loader.load(
-                    model_data,
-                    self.filename,
-                    self.shaders,
-                    self.tangents,
-                    self.zoom,
-                    self.report)
-
+            model_data = ModelData()
+            loader.load(
+                model_data,
+                self.filename,
+                self.shaders,
+                self.tangents,
+                self.zoom,
+                self.report)
+            with cache_lock:
                 cache[self] = model_data
 
-            for i in cache[self].mesh_info:
-                for d in i.texture_uniforms.values():
-                    renpy.display.im.cache.preload_image(d)
+        for i in model_data.mesh_info:
+            for d in i.texture_uniforms.values():
+                renpy.display.im.cache.preload_image(d)
 
         return model_data
 
@@ -906,10 +935,16 @@ class GLTFModel(Displayable):
         return rv
 
     def visit(self):
-        if self in cache:
-            return [ j for i in cache[self].mesh_info for j in i.texture_uniforms.values() ]
+        with cache_lock:
+            model_data = cache.get(self)
+        if model_data is not None:
+            return [ j for i in model_data.mesh_info for j in i.texture_uniforms.values() ]
         else:
             return [ ]
+
+    def predict_shaders(self, shaders):
+        renpy.gl2.gl2shadercache.predict_shader(shaders + tuple(self.shaders))
+        return ()
 
     def predict_one(self):
         new_predicted.add(self)
@@ -944,8 +979,15 @@ def preload():
     if predicted is None:
         return
 
-    for i in set(cache.keys()) - predicted:
-        del cache[i]
+    with cache_lock:
+        budget = max(0, renpy.config.gltf_model_cache_size_mb) * 1024 * 1024
+        inactive = [i for i in cache if i not in predicted]
+        retained = sum(cache[i].memory_size for i in inactive)
+        for i in inactive:
+            if budget and retained <= budget:
+                break
+            retained -= cache[i].memory_size
+            del cache[i]
 
     for i in predicted:
         i.load()

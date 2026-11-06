@@ -10,6 +10,18 @@ Changelog (Ren'Py 7.x-)
 8.6.0
 =====
 
+3D Model Loading
+----------------
+
+GLTF model import releases the Python global interpreter lock during native
+Assimp loading and skips tangent generation when tangents are not requested.
+Concurrent requests for the same model share the completed import.
+
+GLTF models expose their shader combinations to idle shader prediction.
+The optional :var:`config.gltf_model_cache_size_mb` budget retains recently
+used imported models after they leave prediction. Textures continue to use
+Ren'Py's existing image cache.
+
 SDL3
 ----
 
