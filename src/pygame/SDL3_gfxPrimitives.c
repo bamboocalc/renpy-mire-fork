@@ -1436,6 +1436,8 @@ bool aacircleRGBA(SDL_Renderer * renderer, float x, float y, float rad, Uint8 r,
 
 /* ----- Ellipse */
 
+#define ELLIPSE_POINT_BATCH_SIZE 256
+
 /*!
 \brief Internal function to draw pixels or lines in 4 quadrants.
 
@@ -1445,26 +1447,37 @@ bool aacircleRGBA(SDL_Renderer * renderer, float x, float y, float rad, Uint8 r,
 \param dx X offset in pixels of the corners of the quadrant.
 \param dy Y offset in pixels of the corners of the quadrant.
 \param f Flag indicating if the quadrant should be filled (1) or not (0).
+\param points Buffer for unfilled quadrant points.
+\param point_count Number of queued points.
 
 \returns Returns true on success, false on failure.
 */
-bool _drawQuadrants(SDL_Renderer * renderer,  float x, float y, float dx, float dy, bool f)
+bool _drawQuadrants(SDL_Renderer * renderer,  float x, float y, float dx, float dy, bool f, SDL_FPoint *points, int *point_count)
 {
 	bool result = true;
 	float xpdx, xmdx;
 	float ypdy, ymdy;
 
+	if (!f && *point_count + 4 > ELLIPSE_POINT_BATCH_SIZE) {
+		result &= SDL_RenderPoints(renderer, points, *point_count);
+		*point_count = 0;
+	}
+
 	if (dx == 0) {
 		if (dy == 0) {
-			result &= pixel(renderer, x, y);
+			if (f) {
+				result &= pixel(renderer, x, y);
+			} else {
+				points[(*point_count)++] = (SDL_FPoint){ x, y };
+			}
 		} else {
 			ypdy = y + dy;
 			ymdy = y - dy;
 			if (f) {
 				result &= vline(renderer, x, ymdy, ypdy);
 			} else {
-				result &= pixel(renderer, x, ypdy);
-				result &= pixel(renderer, x, ymdy);
+				points[(*point_count)++] = (SDL_FPoint){ x, ypdy };
+				points[(*point_count)++] = (SDL_FPoint){ x, ymdy };
 			}
 		}
 	} else {
@@ -1476,10 +1489,10 @@ bool _drawQuadrants(SDL_Renderer * renderer,  float x, float y, float dx, float 
 				result &= vline(renderer, xpdx, ymdy, ypdy);
 				result &= vline(renderer, xmdx, ymdy, ypdy);
 		} else {
-				result &= pixel(renderer, xpdx, ypdy);
-				result &= pixel(renderer, xmdx, ypdy);
-				result &= pixel(renderer, xpdx, ymdy);
-				result &= pixel(renderer, xmdx, ymdy);
+				points[(*point_count)++] = (SDL_FPoint){ xpdx, ypdy };
+				points[(*point_count)++] = (SDL_FPoint){ xmdx, ypdy };
+				points[(*point_count)++] = (SDL_FPoint){ xpdx, ymdy };
+				points[(*point_count)++] = (SDL_FPoint){ xmdx, ymdy };
 		}
 	}
 
@@ -1513,6 +1526,8 @@ bool _ellipseRGBA(SDL_Renderer * renderer, float x, float y, float rx, float ry,
 	Sint32 scrX, scrY, oldX, oldY;
     Sint32 deltaX, deltaY;
 	Sint32 ellipseOverscan;
+	SDL_FPoint points[ELLIPSE_POINT_BATCH_SIZE];
+	int point_count = 0;
 
 	/*
 	* Sanity check radii
@@ -1577,7 +1592,7 @@ bool _ellipseRGBA(SDL_Renderer * renderer, float x, float y, float rx, float ry,
 	 */
 	oldX = scrX = 0;
 	oldY = scrY = ryi;
-	result &= _drawQuadrants(renderer, x, y, 0, ry, f);
+	result &= _drawQuadrants(renderer, x, y, 0, ry, f, points, &point_count);
 
 	/* Midpoint ellipse algorithm with overdraw */
 	rxi *= ellipseOverscan;
@@ -1609,7 +1624,7 @@ bool _ellipseRGBA(SDL_Renderer * renderer, float x, float y, float rx, float ry,
 		  scrX = curX / ellipseOverscan;
 		  scrY = curY / ellipseOverscan;
 		  if ((scrX != oldX && scrY == oldY) || (scrX != oldX && scrY != oldY)) {
-			result &= _drawQuadrants(renderer, x, y, scrX, scrY, f);
+			result &= _drawQuadrants(renderer, x, y, scrX, scrY, f, points, &point_count);
 			oldX = scrX;
 			oldY = scrY;
 		  }
@@ -1641,7 +1656,7 @@ bool _ellipseRGBA(SDL_Renderer * renderer, float x, float y, float rx, float ry,
 		    if ((scrX != oldX && scrY == oldY) || (scrX != oldX && scrY != oldY)) {
 				oldY--;
 				for (;oldY >= scrY; oldY--) {
-					result &= _drawQuadrants(renderer, x, y, scrX, oldY, f);
+					result &= _drawQuadrants(renderer, x, y, scrX, oldY, f, points, &point_count);
 					/* prevent overdraw */
 					if (f) {
 						oldY = scrY - 1;
@@ -1656,9 +1671,13 @@ bool _ellipseRGBA(SDL_Renderer * renderer, float x, float y, float rx, float ry,
 		if (!f) {
 			oldY--;
 			for (;oldY >= 0; oldY--) {
-				result &= _drawQuadrants(renderer, x, y, scrX, oldY, f);
+				result &= _drawQuadrants(renderer, x, y, scrX, oldY, f, points, &point_count);
 			}
 		}
+	}
+
+	if (point_count) {
+		result &= SDL_RenderPoints(renderer, points, point_count);
 	}
 
 	return (result);
