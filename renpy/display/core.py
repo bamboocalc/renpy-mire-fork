@@ -531,6 +531,17 @@ class Renderer:
 initial_maximum_framerate = 0.0
 
 
+def _redraw_deadline(redraw_time, earliest_redraw_time, frame_requested):
+    """Choose the limiter deadline for a pending frame, or delay a scheduled callback."""
+    if earliest_redraw_time is None:
+        return redraw_time
+    if frame_requested:
+        return earliest_redraw_time
+    if redraw_time is not None:
+        return max(redraw_time, earliest_redraw_time)
+    return None
+
+
 class Interface:
     """
     This represents the user interface that interacts with the user.
@@ -3078,14 +3089,12 @@ class Interface:
                 # Delay the redraw until the next frame is allowed.
                 earliest_redraw_time = self.get_earliest_redraw_time(first_pass)
 
-                if earliest_redraw_time is not None and (
-                    needs_redraw
-                    or (not can_block)
-                    or self.mouse_move
-                    or renpy.display.video.playing()
-                    or redraw_time is not None
-                ):
-                    redraw_time = max(redraw_time or 0, earliest_redraw_time)
+                if earliest_redraw_time is not None:
+                    redraw_time = _redraw_deadline(
+                        redraw_time,
+                        earliest_redraw_time,
+                        needs_redraw or (not can_block) or self.mouse_move or renpy.display.video.playing(),
+                    )
 
                 # Compute the redraw time and set the redraw timer.
                 if redraw_time is not None:

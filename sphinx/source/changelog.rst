@@ -68,6 +68,9 @@ gl_texture_scaling_myuniform, as destribed at :ref:`gl-properties`.
 Graphics
 --------
 
+The framerate limiter no longer delays a requested frame until a future
+displayable redraw.
+
 On mobile and the web, Ren'Py now requires an OpenGL ES 3.0 context, which
 devices with a GPU from 2013 or later provide. On desktop, Ren'Py asks for
 an OpenGL 3.3 context and falls back to OpenGL 2.0.
