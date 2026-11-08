@@ -677,6 +677,28 @@ cdef class ResGetter(Getter):
         else:
             raise TypeError("ResGetter only works with GLTexture values.")
 
+cdef class DepthGetter(Getter):
+    """
+    Returns the depth texture captured with a texture rendered with the depth_texture property.
+    """
+
+    cdef Getter getter
+
+    def __init__(self, uniform_name, getter):
+        Getter.__init__(self, uniform_name)
+        self.getter = getter
+
+    cdef object get(self, GL2DrawingContext context, GL2Model model):
+        value = self.getter.get(context, model)
+
+        if type(value) is Render:
+            value = value.cached_texture
+
+        if isinstance(value, GLTexture) and (<GLTexture> value).depth_texture is not None:
+            return (<GLTexture> value).depth_texture
+
+        raise Exception(f"Uniform {self.uniform_name} needs a texture rendered with gl_depth_texture True.")
+
 cdef class VirtualSizeOpGetter(Getter):
     """
     Returns the size of a texture uniform in virtual pixels. Unlike ResGetter, this doesn't depend on the
@@ -796,6 +818,8 @@ def generate_uniform_setter(shader_name: str, location: int, uniform_name: str, 
     elif operation == "virtual_size":
         getter = VirtualSizeOpGetter(uniform_name, getter)
         uniform_type = "vec2"
+    elif operation == "depth":
+        getter = DepthGetter(uniform_name, getter)
     else:
         raise TypeError(
             f"Uniform {uniform_name} in shader {shader_name} has unknown operation "

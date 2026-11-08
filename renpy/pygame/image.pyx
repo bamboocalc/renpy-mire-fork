@@ -24,6 +24,10 @@ from .iostream cimport open_io
 
 from .error import error
 
+cdef extern from "SDL3/SDL.h" nogil:
+    bint SDL_ISPIXELFORMAT_ALPHA(SDL_PixelFormat format)
+    bint SDL_ISPIXELFORMAT_INDEXED(SDL_PixelFormat format)
+
 import os
 
 cdef extern from "pygame/write_png.h":
@@ -114,15 +118,20 @@ def load(fi: object, namehint: str = "", size: tuple[int, int] | None = None) ->
     if img == NULL:
         raise error()
 
+    # Indexed images and color keys can be transparent without an alpha channel.
+    cdef bint opaque = not (SDL_ISPIXELFORMAT_ALPHA(img.format) or SDL_ISPIXELFORMAT_INDEXED(img.format) or SDL_SurfaceHasColorKey(img))
+
     if img.format != SDL_PIXELFORMAT_RGBA32:
-        new_surface = SDL_ConvertSurface(img, SDL_PIXELFORMAT_RGBA32)
-        SDL_DestroySurface(img)
+        with nogil:
+            new_surface = SDL_ConvertSurface(img, SDL_PIXELFORMAT_RGBA32)
+            SDL_DestroySurface(img)
         img = new_surface
 
         if img == NULL:
             raise error()
 
     surf.take_surface(img)
+    surf.opaque = opaque
 
     return surf
 

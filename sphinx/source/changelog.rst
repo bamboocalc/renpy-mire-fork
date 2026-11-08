@@ -15,7 +15,25 @@ Changelog (Ren'Py 7.x-)
 
 GLTF model import releases the Python global interpreter lock during native
 Assimp loading and skips tangent generation when tangents are not requested.
-Concurrent requests for the same model share the completed import.
+Concurrent requests for the same model share the completed import. GLTFModels
+with the same file, `tangents`, and `zoom` share one import, even when they
+use different shaders.
+
+When :var:`config.compressed_textures` is True, textures such as those of a
+GLTFModel load a BC7 KTX2 file with the same name in place of the image file,
+if the GPU supports BC7. The compressed data is uploaded without decoding, and
+takes a quarter of the GPU memory of an RGBA texture.
+
+Textures load faster, which matters most for GLTF models with many large
+textures. A GLTFModel that renders before its textures are loaded decodes the
+missing ones in parallel on the preload decode threads, and uploads each one as
+it finishes. Two threads that need the same image now share one decode. Images
+without an alpha channel skip the premultiplication pass when they are
+uploaded, and :func:`RawTexture` images skip a copy into a bordered surface.
+Converting decoded images to RGBA and copying imported meshes no longer hold
+the Python global interpreter lock. When prediction queues a texture while the
+screen is idle, Ren'Py draws a frame to upload it instead of waiting for its
+next periodic redraw.
 
 GLTF models expose their shader combinations to idle shader prediction.
 The optional :var:`config.gltf_model_cache_size_mb` budget retains recently
@@ -70,6 +88,28 @@ Graphics
 
 The framerate limiter no longer delays a requested frame until a future
 displayable redraw.
+
+A crop or other clipping above a perspective camera, as from :tpref:`perspective`
+or the ``camera`` statement, now clips what the camera shows. It used to draw nothing,
+because the clip polygon went through the projection. The clip becomes a scissor
+rectangle there; a clip rotated on screen is replaced by its bounding rectangle.
+
+A mesh drawn under a perspective camera is now oversampled by the zoom it is
+shown at. It used to be oversampled by :var:`config.mesh_oversample` whatever
+its zoom, so a full-screen :func:`AlphaMask` on a layer with ``camera at``
+a perspective transform rendered textures up to the GPU size limit each frame.
+
+Depth testing now works in every frame after a texture is rendered from a
+displayable that has ``gl_depth`` itself, such as the child of a :class:`Model`.
+That texture used to leave depth testing off for every later render.
+
+The ``gl_mesh_oversample_scale`` property is now documented and can be set
+on a Transform, as described at :ref:`gl-properties`.
+
+The new ``gl_depth_texture`` property keeps the depth buffer of a texture
+rendered for a mesh, and shaders can sample it with the ``__depth`` suffix,
+such as ``tex0__depth``. The tex0 to tex3 samplers now accept the ``__res``,
+``__virtual_size``, and ``__depth`` suffixes.
 
 On mobile and the web, Ren'Py now requires an OpenGL ES 3.0 context, which
 devices with a GPU from 2013 or later provide. On desktop, Ren'Py asks for

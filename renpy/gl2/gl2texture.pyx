@@ -66,6 +66,12 @@ cdef GLenum RGBA8 = 0x8058
 cdef GLenum TEXTURE_MAX_ANISOTROPY_EXT = 0x84FE
 cdef GLenum MAX_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FF
 
+# shortcut: KTX2 formats by OpenGL format, BC7 only for desktop GPUs; add ETC2 or ASTC rows when a mobile build needs them.
+COMPRESSED_FORMATS = {
+    145 : 0x8E8C, # VK_FORMAT_BC7_UNORM_BLOCK, GL_COMPRESSED_RGBA_BPTC_UNORM
+    146 : 0x8E8C, # VK_FORMAT_BC7_SRGB_BLOCK, sampled without sRGB decoding, like PNG files.
+}
+
 # Texture swizzle parameters (GL 3.3 / GLES 3.0).
 cdef GLenum TEXTURE_SWIZZLE_R = 0x8E42
 cdef GLenum TEXTURE_SWIZZLE_G = 0x8E43
@@ -82,6 +88,7 @@ cdef class TextureLoader:
         self.total_texture_size = 0
         self.texture_load_queue = weakref.WeakSet()
         self.draw = draw
+        self.compressed_formats = set()
 
     def init(self):
 
@@ -97,6 +104,14 @@ cdef class TextureLoader:
 
         self.max_anisotropy = 1.0
         glGetFloatv(MAX_TEXTURE_MAX_ANISOTROPY_EXT, &self.max_anisotropy)
+
+        extensions = self.draw.gl_extensions or set()
+        bptc = { "GL_ARB_texture_compression_bptc", "GL_EXT_texture_compression_bptc" } & extensions
+
+        if bptc and not renpy.uguu.gl.check_missing_functions(("glCompressedTexImage2D",)):
+            self.compressed_formats = { 145, 146 }
+        else:
+            self.compressed_formats = set()
 
     def quit(self):
         """
@@ -201,6 +216,11 @@ cdef class TextureLoader:
 
 
     def load_surface(self, surf, properties):
+        if isinstance(surf, renpy.display.im.CompressedImage):
+            rv = Texture(surf.get_size(), self)
+            rv.from_compressed(surf, properties)
+            return rv
+
         border = 1
 
         size = surf.get_size()
@@ -301,6 +321,9 @@ cdef class GLTexture(GL2Model):
         # Update the loader.
         self.loader = loader
 
+        self.depth_texture = None
+        self.compressed = None
+
         # Borders.
         self.bl = 0
         self.bt = 0
@@ -365,6 +388,87 @@ cdef class GLTexture(GL2Model):
             )
 
         self.loader.texture_load_queue.add(self)
+
+    def from_compressed(GLTexture self, image, properties):
+        """
+        Called to indicate this texture should be loaded from a CompressedImage.
+        """
+
+        self.compressed = image
+        self.properties = dict(properties)
+        self.properties["mipmap"] = self.should_have_mipmaps(properties) and len(image.levels) > 1
+        self.properties["compressed_size"] = 0
+
+        self.mesh = Mesh2.texture_rectangle(
+            0.0, 0.0, self.width, self.height,
+            0.0, 0.0, 1.0, 1.0,
+            )
+
+        self.loader.texture_load_queue.add(self)
+
+    def load_gltexture_compressed(GLTexture self):
+        """
+        Uploads the compressed mipmap levels of this texture without decoding them.
+        """
+
+        cdef GLuint number
+        cdef const char *data
+        cdef int width
+        cdef int height
+        cdef int level
+        cdef int max_level
+        cdef Py_ssize_t offset
+        cdef Py_ssize_t length
+
+        if self.loaded:
+            return
+
+        image = self.compressed
+        data = image.data
+        internal_format = COMPRESSED_FORMATS[image.vk_format]
+
+        max_level = min(len(image.levels) - 1, renpy.config.max_mipmap_level) if self.has_mipmaps() else 0
+
+        glGenTextures(1, &number)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, number)
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, max_level)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+
+        self.min_filter = GL_LINEAR_MIPMAP_NEAREST if max_level else GL_LINEAR
+        self.default_min_filter = self.min_filter
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, self.min_filter)
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+
+        if self.loader.max_anisotropy > 1.0:
+            glTexParameterf(GL_TEXTURE_2D, TEXTURE_MAX_ANISOTROPY_EXT, self.loader.max_anisotropy)
+
+        width = image.width
+        height = image.height
+        uploaded = 0
+
+        for level in range(max_level + 1):
+            offset, length = image.levels[level]
+            glCompressedTexImage2D(GL_TEXTURE_2D, level, internal_format, width, height, 0, length, <const void *> (data + offset))
+            uploaded += length
+
+            width = max(width >> 1, 1)
+            height = max(height >> 1, 1)
+
+        self.texture_width = image.width
+        self.texture_height = image.height
+
+        self.properties["compressed_size"] = uploaded
+        self.loader.total_texture_size += uploaded
+
+        self.number = number
+        self.loader.allocated.add(self.number)
+
+        self.loaded = True
+        self.compressed = None
 
     cdef bint from_yuv_plane_pointer(GLTexture self, const unsigned char *data, int width, int height, GLenum format, bint mipmap):
         """Uploads one tightly packed 8-bit video plane as a 2D texture."""
@@ -477,12 +581,20 @@ cdef class GLTexture(GL2Model):
 
         self.allocate_texture(premultiplied, tw, th, properties)
 
+        depth_texture = None
+
+        if properties.get("depth_texture", False):
+            depth_texture = self.attach_depth_texture(tw, th)
+
         # Set up the viewport.
         glViewport(0, 0, tw, th)
 
         # Clear the screen.
         glClearColor(0.0, 0.0, 0.0, 0.0)
         clear_color_buffer(0, 0, tw, th)
+
+        if depth_texture is not None:
+            glClear(GL_DEPTH_BUFFER_BIT)
 
         # Set up the default modes.
         glEnable(GL_BLEND)
@@ -492,6 +604,10 @@ cdef class GLTexture(GL2Model):
         glBindTexture(GL_TEXTURE_2D, premultiplied)
         glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, tw, th, 0)
 
+        if depth_texture is not None:
+            self.detach_depth_texture()
+            self.depth_texture = depth_texture
+
         self.mipmap_texture(premultiplied, tw, th, properties)
 
         self.number = premultiplied
@@ -499,6 +615,52 @@ cdef class GLTexture(GL2Model):
 
         self.loaded = True
 
+
+    def attach_depth_texture(GLTexture self, int tw, int th):
+        """
+        Attaches a new `tw` x `th` depth texture to the bound framebuffer in place of its depth renderbuffer, and
+        returns it, or None if the framebuffer can't use it.
+        """
+
+        cdef GLuint number
+
+        glGenTextures(1, &number)
+        glBindTexture(GL_TEXTURE_2D, number)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, tw, th, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL)
+
+        rv = Texture((self.width, self.height), self.loader)
+        rv.number = number
+        rv.loaded = True
+        rv.texture_width = tw
+        rv.texture_height = th
+        rv.properties = { "mipmap" : False }
+        rv.mesh = self.mesh
+
+        # Depth formats aren't filterable on OpenGL ES 3.
+        rv.mag_filter = rv.min_filter = rv.default_mag_filter = rv.default_min_filter = GL_NEAREST
+
+        self.loader.allocated.add(number)
+        self.loader.total_texture_size += self.width * self.height * 4
+
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, number, 0)
+
+        if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
+            self.detach_depth_texture()
+            renpy.display.log.write("gl_depth_texture: The framebuffer can't use a %dx%d depth texture.", tw, th)
+            return None
+
+        return rv
+
+    def detach_depth_texture(GLTexture self):
+        """
+        Puts the depth renderbuffer back on the bound framebuffer.
+        """
+
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, self.loader.draw.depth_renderbuffer)
 
     def __repr__(self):
         return "<GLTexture {}x{} {}>".format(self.width, self.height, self.number)
@@ -742,7 +904,8 @@ cdef class GLTexture(GL2Model):
         Adds a mipmap to this texture, if it doesn't exist.
         """
 
-        if self.properties["mipmap"]:
+        # Compressed textures can't generate mipmaps; they keep the levels from their file.
+        if self.properties["mipmap"] or ("compressed_size" in self.properties):
             return
 
         self.properties["mipmap"] = True
@@ -760,7 +923,9 @@ cdef class GLTexture(GL2Model):
             if self.loaded:
                 self.loader.free_list.append(self.number)
 
-                if self.properties.get("movie_yuv", False):
+                if "compressed_size" in self.properties:
+                    self.loader.total_texture_size -= self.properties["compressed_size"]
+                elif self.properties.get("movie_yuv", False):
                     texture_size = self.width * self.height * self.properties["movie_yuv_components"]
                     if self.has_mipmaps():
                         texture_size = int(texture_size * 1.34)
@@ -774,7 +939,13 @@ cdef class GLTexture(GL2Model):
 
     def load(self):
 
-        if self.properties.get("premultiplied", False):
+        # Render targets are loaded, and have no surface.
+        if self.loaded:
+            return
+
+        if self.compressed is not None:
+            self.load_gltexture_compressed()
+        elif self.properties.get("premultiplied", False) or (self.surface is not None and self.surface.opaque):
             self.load_gltexture_premultiplied()
         else:
             self.load_gltexture()

@@ -32,6 +32,7 @@ from types import SimpleNamespace
 import pytest
 
 import renpy
+from renpy.display.render import IDENTITY, Render
 from renpy.gl2 import assimp
 
 
@@ -92,10 +93,10 @@ def test_zero_budget_preserves_existing_eviction_policy(model_cache):
     old = object()
     active = assimp.GLTFModel("active.glb", shader="renpy.texture")
     model_cache[old] = SimpleNamespace(memory_size=1)
-    model_cache[active] = SimpleNamespace(memory_size=1)
+    model_cache[active.cache_key] = SimpleNamespace(memory_size=1)
     assimp.predicted.add(active)
     assimp.preload()
-    assert list(model_cache) == [active]
+    assert list(model_cache) == [active.cache_key]
 
 
 def test_loading_an_inactive_model_promotes_it_before_eviction(model_cache, mocker):
@@ -103,13 +104,13 @@ def test_loading_an_inactive_model_promotes_it_before_eviction(model_cache, mock
     older = assimp.GLTFModel("older.glb", shader="renpy.texture")
     recent = assimp.GLTFModel("recent.glb", shader="renpy.texture")
     for model in (older, recent):
-        model_cache[model] = SimpleNamespace(memory_size=3 * 1024 * 1024)
+        model_cache[model.cache_key] = SimpleNamespace(memory_size=3 * 1024 * 1024)
     mocker.patch.object(renpy.config, "gltf_model_cache_size_mb", 4)
-    data = model_cache[older]
+    data = model_cache[older.cache_key]
     assert older.load() is data
     assimp.preload()
-    assert list(model_cache) == [older]
-    assert model_cache[older] is data
+    assert list(model_cache) == [older.cache_key]
+    assert model_cache[older.cache_key] is data
 
 
 def test_predicted_models_do_not_consume_the_inactive_budget(model_cache, mocker):
@@ -117,19 +118,19 @@ def test_predicted_models_do_not_consume_the_inactive_budget(model_cache, mocker
     inactive = object()
     active = assimp.GLTFModel("active.glb", shader="renpy.texture")
     model_cache[inactive] = SimpleNamespace(memory_size=3 * 1024 * 1024)
-    model_cache[active] = SimpleNamespace(memory_size=8 * 1024 * 1024)
+    model_cache[active.cache_key] = SimpleNamespace(memory_size=8 * 1024 * 1024)
     assimp.predicted.add(active)
     mocker.patch.object(renpy.config, "gltf_model_cache_size_mb", 4)
     assimp.preload()
-    assert set(model_cache) == {inactive, active}
+    assert set(model_cache) == {inactive, active.cache_key}
 
 
 def test_explicit_memory_clear_removes_predicted_and_retained_models(model_cache, mocker):
     """An explicit clear overrides both prediction and the optional retention budget."""
     inactive = object()
     active = assimp.GLTFModel("active.glb", shader="renpy.texture")
-    for model in (inactive, active):
-        model_cache[model] = SimpleNamespace(memory_size=1)
+    model_cache[inactive] = SimpleNamespace(memory_size=1)
+    model_cache[active.cache_key] = SimpleNamespace(memory_size=1)
     assimp.predicted.add(active)
     mocker.patch.object(renpy.config, "gltf_model_cache_size_mb", 4)
     assimp.free_memory()
@@ -187,9 +188,38 @@ def test_failed_import_can_be_retried(model_cache, mocker):
     model = assimp.GLTFModel("broken.glb", shader="renpy.texture")
     with pytest.raises(ValueError, match="bad model"):
         model.load()
-    assert model not in model_cache
+    assert model.cache_key not in model_cache
     loader.load.side_effect = lambda data, *args: setattr(data, "mesh_info", [])
-    assert model.load() is model_cache[model]
+    assert model.load() is model_cache[model.cache_key]
+
+
+def test_equal_import_options_share_one_import(model_cache, mocker):
+    """Models that differ only in shaders share an import; zoom and tangents change the imported data."""
+    loader = SimpleNamespace(load=mocker.Mock(side_effect=lambda data, *args: setattr(data, "mesh_info", [])))
+    mocker.patch.object(assimp, "loader", loader)
+    first = assimp.GLTFModel("room.glb", shader="example.first")
+    second = assimp.GLTFModel("room.glb", shader="example.second")
+    assert first.load() is second.load()
+    loader.load.assert_called_once()
+    assimp.GLTFModel("room.glb", shader="example.first", zoom=2.0).load()
+    assimp.GLTFModel("room.glb", shader="example.first", tangents=True).load()
+    assert loader.load.call_count == 3
+
+
+def test_shared_import_renders_with_each_models_shaders(model_cache, mocker):
+    """A shared import draws with the shaders of the model being rendered, not the one that imported it."""
+    mocker.patch.object(assimp, "new_predicted", set())
+    mocker.patch.object(renpy.display.im, "render_for_texture", return_value=Render(1, 1))
+    mesh_info = SimpleNamespace(mesh=None, uniforms={}, texture_uniforms={}, twosided=False)
+    first = assimp.GLTFModel("room.glb", shader="example.first")
+    second = assimp.GLTFModel("room.glb", shader="example.second")
+    model_cache[first.cache_key] = SimpleNamespace(
+        blit_info=[SimpleNamespace(mesh_info=mesh_info, reverse=IDENTITY, forward=IDENTITY)],
+        mesh_info=[mesh_info],
+    )
+    for model, shader in ((first, "example.first"), (second, "example.second")):
+        mesh_render = model.render(0, 0, 0, 0).children[0][0]
+        assert mesh_render.shaders == (shader,)
 
 
 def _native_attribute_rows(mesh):
@@ -304,7 +334,7 @@ def test_cached_model_does_not_wait_for_an_unrelated_import(model_cache, operati
     """Rendering or visiting a resident room must not wait behind an unrelated import."""
     model = assimp.GLTFModel("resident.glb", shader="renpy.texture")
     data = SimpleNamespace(memory_size=1, mesh_info=[])
-    model_cache[model] = data
+    model_cache[model.cache_key] = data
     with ThreadPoolExecutor(max_workers=1) as pool, assimp.loader_lock:
         result = pool.submit(getattr(model, operation)).result(timeout=1)
         if operation == "load":

@@ -60,3 +60,6 @@ cdef class Surface:
     cdef void _blend(self, Surface source, int function)
 
     cdef bint has_alpha
+
+    # True when the image this was decoded from has no alpha, so premultiplying it changes nothing.
+    cdef public bint opaque

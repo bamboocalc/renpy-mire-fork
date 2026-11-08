@@ -472,6 +472,10 @@ containing the size of the texture in virtual pixels. Unlike ``__res``, this doe
 resolution the texture was rendered or loaded at, so it doesn't change when the window is scaled.
 For example, ``u_markup__virtual_size`` will give the virtual size of the ``u_markup`` texture.
 
+If a sampler uniform holds a texture rendered with :ref:`gl_depth_texture <gl-properties>`, then
+suffixing it with ``__depth`` will give a sampler2D containing that render's depth buffer. The built-in
+samplers take these suffixes too, so ``tex0__depth`` is the depth of ``tex0``.
+
 If a vec4 uniform is available, then suffixing it with ``__premul`` will give a vec4
 containing the premultiplied color. For example, ``u_color__premul`` will give a vec4
 where the red, green, and blue channels are multiplied by the alpha channel.
@@ -658,6 +662,26 @@ can be supplied the property method.
     If True or not set, the texture is rendered at the same resolution
     as the window displaying the game. If False, it's rendered at the
     virtual resolution of the displayable.
+
+``gl_depth_texture``
+    If True, the texture also keeps the depth buffer of its render, which a
+    shader samples by adding ``__depth`` to the sampler's name, as in
+    ``tex0__depth``. The red channel holds the depth OpenGL stores, from 0.0
+    at the near plane to 1.0 at the far plane, and 1.0 where nothing was
+    drawn with :tpref:`gl_depth`. Under a ``perspective`` of (`n`, `p`, `f`),
+    the distance from the camera is
+    ``2.0 * n * f / (f + n - (2.0 * depth - 1.0) * (f - n))``.
+
+    The framebuffer must accept a depth texture of a different size from its
+    color buffer, as OpenGL 3, OpenGL ES 3, and WebGL 2 do. When it doesn't,
+    Ren'Py logs that, and a shader that samples the depth raises an exception.
+
+``gl_mesh_oversample_scale``
+    A number that multiplies how much the texture is enlarged when the
+    transforms above it zoom it up. The result is limited to the range from
+    1.0 to :var:`config.mesh_oversample`. This defaults to 1.0. Setting it
+    to 0.0 renders the texture at the size of the displayable, which keeps
+    a low-resolution render blocky when it is enlarged with ``nearest``.
 
 
 ``gl_mipmap``

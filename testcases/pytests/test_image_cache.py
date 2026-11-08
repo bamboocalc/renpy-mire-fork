@@ -1,3 +1,7 @@
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 import renpy
@@ -213,3 +217,87 @@ def test_premultiply_setting_gets_separate_cache_entry(cache, draw):
         {"properties": {}},
         {"properties": {"premultiplied": True}},
     ]
+
+
+def slow_loader(mocker, image):
+    """
+    Replaces image.load with one that signals `started`, then waits for `release` before decoding, and records
+    each call's thread.
+    """
+
+    started, release = threading.Event(), threading.Event()
+    original = image.load
+    calls = []
+
+    def load():
+        calls.append(threading.current_thread().name)
+        started.set()
+        assert release.wait(5)
+        return original()
+
+    mocker.patch.object(image, "load", side_effect=load)
+    return started, release, calls
+
+
+def test_concurrent_requests_share_one_decode(mocker, cache, draw):
+    """A thread that needs an image another thread is decoding waits for that decode instead of repeating it."""
+
+    image = im.Null()
+    started, release, calls = slow_loader(mocker, image)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(cache.get, image, texture=True)
+        assert started.wait(5)
+        second = pool.submit(cache.get, image, texture=True)
+        time.sleep(0.1)
+        assert not second.done()
+        release.set()
+        assert first.result(5) is second.result(5)
+
+    assert len(calls) == 1
+    assert cache.loading == {}
+
+
+def test_failed_decode_releases_waiters(mocker, cache, draw):
+    """When the decoding thread fails, a waiting thread decodes the image itself and reports its own error."""
+
+    image = im.Null()
+    started, release, calls = slow_loader(mocker, image)
+
+    def failing():
+        calls.append(threading.current_thread().name)
+        started.set()
+        assert release.wait(5)
+        raise ValueError("bad image")
+
+    image.load.side_effect = failing
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(cache.get, image, texture=True)
+        assert started.wait(5)
+        second = pool.submit(cache.get, image, texture=True)
+        time.sleep(0.1)
+        release.set()
+
+        for future in (first, second):
+            with pytest.raises(ValueError, match="bad image"):
+                future.result(5)
+
+    assert len(calls) == 2
+    assert cache.loading == {}
+
+
+def test_get_textures_decodes_on_the_pool_and_uploads(mocker, cache, draw):
+    """Uncached images are decoded on the decode pool and uploaded on the calling thread; others are skipped."""
+
+    pool = ThreadPoolExecutor(max_workers=2)
+    mocker.patch.object(cache, "get_decode_pool", return_value=pool)
+    images = [im.Null(), im.Null()]
+
+    try:
+        cache.get_textures(images + [Render(1, 1)])
+    finally:
+        pool.shutdown()
+
+    assert all(cache.cache[i].texture is not None for i in images)
+    assert draw.ready_one_texture.call_count == len(images)

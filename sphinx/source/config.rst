@@ -416,11 +416,13 @@ Display
     performance test. This image will be shown for 5 frames or .25
     seconds, on startup. It will then be automatically hidden.
 
-.. var:: config.mesh_oversample = 1.0
+.. var:: config.mesh_oversample = 8.0
 
     Determines how much mesh textures can be oversampled by. This, in turn, controls the maximum
     amount a mesh can be scaled up by before it introduces additional blurriness, at the risk of
-    creating excessive large textures when a mesh is scaled up greatly.
+    creating excessive large textures when a mesh is scaled up greatly. Games with a
+    :var:`config.script_version` of 8.5 or earlier use 1.0. The ``gl_mesh_oversample_scale``
+    property changes this for one mesh.
 
 .. var:: config.minimum_presplash_time = 0.0
 
@@ -1708,6 +1710,30 @@ Showing Images
     If set too large, this can waste memory. If set too small, images
     can be repeatedly loaded, hurting performance. If not None,
     :var:`config.image_cache_size` is used instead of this variable.
+
+.. var:: config.compressed_textures = False
+
+    If True, a :func:`RawTexture` of an image file loads the KTX2 file with
+    the same name and a .ktx2 extension in its place, when that file exists
+    and the GPU can use its format. The textures of :class:`GLTFModel`,
+    Live2D, and :func:`Model` are RawTextures. The mipmap levels in the KTX2
+    file are uploaded without decoding, so the texture uses the GPU memory of
+    its compressed data, and that size is what counts against the image cache.
+
+    Ren'Py uploads BC7 data (``VK_FORMAT_BC7_UNORM_BLOCK`` or
+    ``VK_FORMAT_BC7_SRGB_BLOCK``) when the GPU reports
+    ``GL_ARB_texture_compression_bptc`` or ``GL_EXT_texture_compression_bptc``.
+    Otherwise, or when the KTX2 file is larger than the GPU allows, it loads
+    the image file. Colors are sampled without sRGB decoding, as image files
+    are.
+
+    The KTX2 file must be 2D, with one face, no array layers, and no
+    supercompression. It should contain every mipmap level, since Ren'Py
+    can't generate mipmaps for compressed data. When the texture is
+    premultiplied, as textures are by default, the colors must be
+    premultiplied by alpha and the file's data format descriptor must set
+    the premultiplied alpha flag. A file whose flag doesn't match the
+    texture raises an exception.
 
 .. var:: config.gltf_model_cache_size_mb = 0
 

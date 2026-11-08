@@ -1349,8 +1349,14 @@ cdef class GL2Draw:
                 r.shaders,
                 uniforms)
 
-            tx, ty = reverse.transform(1, 1)
-            oversample = math.hypot(tx, ty) / math.hypot(1, 1)
+            # Projects a unit vector with the divide by w, since a perspective camera scales the raw point by its z11.
+            ox, oy, oz, ow = reverse.transform(0, 0, 0, 1, 4)
+            tx, ty, tz, tw = reverse.transform(1, 1, 0, 1, 4)
+
+            if ow > 0 and tw > 0:
+                oversample = math.hypot(tx / tw - ox / ow, ty / tw - oy / ow) / math.hypot(1, 1)
+            else:
+                oversample = 1.0
 
             if r.properties is not None:
                 oversample *= r.properties.get("mesh_oversample_scale", 1.0)
@@ -1608,6 +1614,33 @@ Should the front face be inverted? This is used to make the front face work prop
 texture, with a flipped y axis.
 """
 
+cdef inline bint is_projective(Render r):
+    """
+    True if the reverse matrix of `r` divides by w, which a 2D clip polygon can't pass through.
+    """
+
+    return r.matrix_kind == MATRIX_PROJECTION or r.reverse.wdx != 0.0 or r.reverse.wdy != 0.0 or r.reverse.wdz != 0.0 or r.reverse.wdw != 1.0
+
+
+current_scissor: tuple[int, int, int, int] | None = None
+
+
+def set_scissor(scissor):
+    """
+    Sets the scissor rectangle, or disables the scissor test when `scissor` is None.
+    """
+
+    global current_scissor
+
+    current_scissor = scissor
+
+    if scissor is None:
+        glDisable(GL_SCISSOR_TEST)
+    else:
+        glEnable(GL_SCISSOR_TEST)
+        glScissor(scissor[0], scissor[1], scissor[2], scissor[3])
+
+
 def set_cull_face(cull_face):
     """
     Sets the cull face.
@@ -1683,6 +1716,7 @@ cdef class GL2DrawingContext:
         rv.model_matrix.ctake(self.model_matrix)
 
         rv.clip_polygon = self.clip_polygon
+        rv.scissor = self.scissor
 
         rv.shaders = self.shaders
         rv.uniforms = self.uniforms
@@ -1783,6 +1817,9 @@ cdef class GL2DrawingContext:
         if self.cull_face is not current_cull_face:
             set_cull_face(self.cull_face)
 
+        if self.scissor != current_scissor:
+            set_scissor(self.scissor)
+
         # If a clip polygon is in place, clip the mesh with it.
         if self.clip_polygon is not None:
 
@@ -1816,6 +1853,49 @@ cdef class GL2DrawingContext:
         cdef Program program = gl2draw.shader_cache.get(self.shaders)
 
         program.draw(self, model, mesh)
+
+    cdef void clip_to_scissor(self):
+        """
+        Replaces clip_polygon with the window rectangle around it, as a projection can't carry a 2D polygon. A
+        clip that is rotated on screen becomes its bounding rectangle.
+        """
+
+        cdef Matrix transform = self.projectionview_matrix * self.model_matrix
+        cdef Polygon polygon = self.clip_polygon
+        cdef GLint viewport[4]
+        cdef int i
+
+        glGetIntegerv(GL_VIEWPORT, viewport)
+
+        xs = [ ]
+        ys = [ ]
+
+        for i in range(polygon.points):
+            x, y, z, w = transform.transform(polygon.point[i].x, polygon.point[i].y, 0.0, 1.0, components=4)
+
+            if w > 0.0:
+                xs.append(viewport[0] + (x / w + 1.0) * 0.5 * viewport[2])
+                ys.append(viewport[1] + (y / w + 1.0) * 0.5 * viewport[3])
+
+        self.clip_polygon = None
+
+        if not xs:
+            self.scissor = (0, 0, 0, 0)
+            return
+
+        left = round(min(xs))
+        bottom = round(min(ys))
+        right = round(max(xs))
+        top = round(max(ys))
+
+        if self.scissor is not None:
+            sx, sy, sw, sh = self.scissor
+            left = max(left, sx)
+            bottom = max(bottom, sy)
+            right = min(right, sx + sw)
+            top = min(top, sy + sh)
+
+        self.scissor = (left, bottom, max(0, right - left), max(0, top - bottom))
 
     cdef void set_text_rect(self, Render r):
         """
@@ -1924,6 +2004,10 @@ cdef class GL2DrawingContext:
             has_depth = not self.has_depth and r.properties.get("depth", False)
 
             if has_depth:
+                # The scissor test limits the clear, so it must be this render's.
+                if self.scissor != current_scissor:
+                    set_scissor(self.scissor)
+
                 glClear(GL_DEPTH_BUFFER_BIT)
                 glEnable(GL_DEPTH_TEST)
                 glDepthFunc(GL_LEQUAL)
@@ -1948,6 +2032,9 @@ cdef class GL2DrawingContext:
                 self.draw_model(r.cached_model)
             else:
                 ctx = self.child_context()
+
+                if ctx.clip_polygon is not None and is_projective(r):
+                    ctx.clip_to_scissor()
 
                 ctx.model_matrix.inplace_multiply(r.reverse)
 
@@ -1991,6 +2078,9 @@ cdef class GL2DrawingContext:
                         ctx.clip_polygon = ctx.clip_polygon.offset(-cx, -cy)
 
                 if has_reverse:
+                    if ctx.clip_polygon is not None and is_projective(r):
+                        ctx.clip_to_scissor()
+
                     ctx.model_matrix.inplace_multiply(r.reverse)
 
                     if r.matrix_kind == MATRIX_PROJECTION:
@@ -2055,6 +2145,7 @@ def draw_render(what, int drawable_width, int drawable_height, Matrix projection
 
     current_invert_front_face = invert_front_face
     set_cull_face(None)
+    set_scissor(None)
 
     # Reset the GL state cache at the start of each render pass.
     state_cache.reset()
@@ -2076,12 +2167,18 @@ def draw_render(what, int drawable_width, int drawable_height, Matrix projection
     ctx.properties = { }
 
     ctx.clip_polygon = None
+    ctx.scissor = None
     ctx.pixel_perfect = True
+    # A depth or cull_face property on the top-level render would otherwise persist into later passes.
+    ctx.has_depth = False
+    ctx.cull_face = None
 
     if renpy.config.nearest_neighbor:
         ctx.properties["texture_scaling"] = "nearest"
 
     ctx.draw_one(what)
+
+    set_scissor(None)
 
     # Restore the GL state to Ren'Py's defaults after the render pass.
     state_cache.set_blend(GL_FUNC_ADD, GL_FUNC_ADD, GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)

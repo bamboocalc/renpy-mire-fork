@@ -107,6 +107,7 @@ cdef class Surface:
         self.owns_surface = False
         self.window_surface = False
         self.has_alpha = False
+        self.opaque = False
         self.deallocation = NULL
 
         if RENPY_SURFACE_DEALLOCATION_THREADED:

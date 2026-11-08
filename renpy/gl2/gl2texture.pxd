@@ -52,6 +52,9 @@ cdef class TextureLoader:
 
     cdef public GLfloat max_anisotropy
 
+    # The KTX2 Vulkan format numbers this GPU can upload, as a set.
+    cdef public object compressed_formats
+
 
 cdef class GLTexture(GL2Model):
 
@@ -65,8 +68,14 @@ cdef class GLTexture(GL2Model):
     # that.
     cdef Surface surface
 
+    # The CompressedImage to upload instead of a surface, or None.
+    cdef object compressed
+
     # The texture loader associated with this texture.
     cdef TextureLoader loader
+
+    # The depth texture captured with this texture when it was rendered with depth_texture, or None.
+    cdef public object depth_texture
 
     # The width and height of the texture. (Which may be a different size
     # than the model, if the texture is being rendered in the drawable

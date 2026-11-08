@@ -151,7 +151,7 @@ safe_formats = {"png", "jpg", "jpeg", "webp"}
 image_load_lock = threading.RLock()
 
 
-def load_image(f, filename, size=None):
+def load_image(f, filename, size=None, copy=True):
     """
     `f`
         A file-like object that can be used to load the image.
@@ -161,6 +161,9 @@ def load_image(f, filename, size=None):
     `size`
         If given, the image is scaled to this size. This only works for
         SVG images.
+    `copy`
+        If False, returns the decoded surface without copying it into a
+        surface with a border, for images that only become textures.
     """
 
     _, _, ext = filename.rpartition(".")
@@ -184,6 +187,9 @@ def load_image(f, filename, size=None):
         ee = Exception(f"Could not load image {filename!r}")
         ee.add_note(note)
         raise ee from e
+
+    if not copy:
+        return surf
 
     rv = copy_surface_unscaled(surf)
     return rv

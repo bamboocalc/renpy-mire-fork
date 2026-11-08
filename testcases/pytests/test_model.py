@@ -6,7 +6,9 @@ from renpy.display.displayable import Displayable
 from renpy.display.image import DynamicImage
 from renpy.display.layout import Null
 from renpy.display.model import Model
-from renpy.gl2.gl2uniform import SamplerSetter
+from renpy.display.transform import Transform
+from renpy.gl2.gl2shadercache import ShaderPart
+from renpy.gl2.gl2uniform import SamplerSetter, generate_uniform_setter
 from renpy.uguu import GL_CLAMP_TO_EDGE, GL_REPEAT, GL_TEXTURE_2D
 
 
@@ -171,3 +173,36 @@ def test_sampler_property_keys(uniform_name: str, suffix: str) -> None:
 
     assert setter.texture_wrap_key == "texture_wrap_" + suffix
     assert setter.texture_scaling_key == "texture_scaling_" + suffix
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("tex0__depth", "tex0_OP_depth"),
+        ("tex3__res", "tex3_OP_res"),
+        ("u_scene__depth", "u_scene_OP_depth"),
+        ("tex4__depth", "tex4__depth"),
+    ],
+)
+def test_sampler_operation_names(name: str, expected: str) -> None:
+    """The built-in tex0 to tex3 samplers take operation suffixes like u_ samplers; tex4 is not a built-in."""
+
+    part = ShaderPart("test.sampler_operation_names")
+
+    assert part.substitute_name(f"texture2D({name}, v_tex_coord)") == f"texture2D({expected}, v_tex_coord)"
+
+
+def test_depth_operation_is_a_sampler() -> None:
+    """A __depth sampler takes the next texture unit; an unknown operation would raise TypeError."""
+
+    setter, sampler = generate_uniform_setter("test", 0, "tex0_OP_depth", "sampler2D", None, 2)
+
+    assert isinstance(setter, SamplerSetter)
+    assert sampler == 3
+
+
+@pytest.mark.parametrize("name", ["gl_depth_texture", "gl_mesh_oversample_scale"])
+def test_render_texture_properties_are_transform_properties(name: str) -> None:
+    """Both properties reach a Transform's render properties without the gl_ prefix."""
+
+    assert getattr(Transform(**{name: 0.0}), name) == 0.0

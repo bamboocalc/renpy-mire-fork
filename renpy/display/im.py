@@ -27,6 +27,7 @@
 from typing import Any, Literal
 
 import math
+import struct
 import zipfile
 import threading
 import time
@@ -64,7 +65,14 @@ class CacheEntry:
         # The time when this cache entry was last used.
         self.time = 0
 
+        # The bytes of block-compressed texture data, or None for a surface.
+        self.compressed_size: int | None = getattr(surf, "compressed_size", None)
+
     def size(self) -> int:
+        if self.compressed_size is not None:
+            # The cache counts four-byte pixels.
+            return self.compressed_size * (2 if renpy.config.cache_surfaces else 1) // 4
+
         if renpy.config.cache_surfaces:
             multiplier = 2.34  # 1 for the texture, 1 for the surface, .34 for mipmaps.
         else:
@@ -94,6 +102,9 @@ class Cache:
 
         # A lock that must be held when updating the cache.
         self.lock = threading.Condition()
+
+        # Images some thread is decoding, mapped to an event that is set when that decode finishes.
+        self.loading: dict[ImageBase, threading.Event] = {}
 
         # A lock that must be held to notify the preload thread.
         self.preload_lock = threading.Condition()
@@ -278,6 +289,59 @@ class Cache:
     # cache to be current, and maintaining the size of the current
     # generation of images.
     def get(self, image: "ImageBase", predict: bool = False, texture: bool = False, render: bool = False) -> Any:
+        if not isinstance(image, ImageBase) or not image.cache:
+            return self._get(image, predict, texture, render)
+
+        while True:
+            ce = self.cache.get(image)
+
+            if ce is not None and (ce.surf is not None or ((texture or render) and ce.texture is not None)):
+                return self._get(image, predict, texture, render)
+
+            with self.lock:
+                loading = self.loading.get(image)
+
+                if loading is None:
+                    loading = self.loading[image] = threading.Event()
+                    break
+
+            # Another thread is decoding this image, so use its result instead of decoding it again.
+            loading.wait()
+
+        try:
+            return self._get(image, predict, texture, render)
+        finally:
+            with self.lock:
+                del self.loading[image]
+
+            loading.set()
+
+    def get_textures(self, images: list[Any]):
+        """
+        Decodes the uncached images among `images` in parallel on the decode pool, and uploads each texture as it
+        finishes, so a render that needs many textures waits for about the slowest one instead of their sum.
+        """
+
+        pool = self.get_decode_pool()
+
+        missing = [
+            i for i in images if isinstance(i, ImageBase) and ((ce := self.cache.get(i)) is None or ce.texture is None)
+        ]
+
+        if pool is None or len(missing) < 2:
+            return
+
+        for future in as_completed([pool.submit(self.preload_texture, i) for i in missing]):
+            try:
+                future.result()
+            except Exception:
+                # The render loads the image again on this thread, which reports the error.
+                pass
+
+            while renpy.display.draw.ready_one_texture():
+                pass
+
+    def _get(self, image: "ImageBase", predict: bool = False, texture: bool = False, render: bool = False) -> Any:
         if render:
             texture = True
 
@@ -371,6 +435,9 @@ class Cache:
                 if not predict and renpy.display.draw is not None:
                     while renpy.display.draw.ready_one_texture():
                         pass
+
+                if predict:
+                    wake_texture_upload()
 
             if not predict:
                 rv = ce.texture
@@ -642,6 +709,25 @@ class Cache:
             self.load_log.pop()
 
 
+def wake_texture_upload():
+    """
+    Called when a preload thread queues a texture, so an idle interaction draws a frame and runs the task that
+    uploads it, instead of waiting for its next periodic redraw.
+    """
+
+    interface = renpy.display.interface
+
+    if interface is None or threading.current_thread() is threading.main_thread():
+        return
+
+    interface.force_redraw = True
+
+    try:
+        renpy.pygame.event.post(interface.redraw_event)
+    except Exception:
+        pass
+
+
 # The cache object.
 cache = Cache()
 
@@ -895,8 +981,8 @@ class Image(ImageBase):
         else:
             return oversample
 
-    def load(self, unscaled=False):
-        # Unscaled is no longer used.
+    def load(self, unscaled=False, copy=True):
+        # Unscaled is no longer used. A copy of False skips the bordered copy, for images used only as textures.
 
         cache.add_load_log(self.filename)
 
@@ -913,7 +999,7 @@ class Image(ImageBase):
                 force_size = e.size
 
             with filelike as f:
-                surf = renpy.display.pgrender.load_image(f, filename)
+                surf = renpy.display.pgrender.load_image(f, filename, copy=copy)
 
             if force_size is not None:
                 # avoid size-related exceptions (e.g. Crop on a smaller placeholder)
@@ -1083,10 +1169,114 @@ class UnoptimizedTexture(ImageBase):
         return self.image.get_hash()
 
     def load(self):
+        if renpy.config.compressed_textures and isinstance(self.image, Image):
+            rv = load_compressed_texture(self.image.filename, self.premultiply)
+
+            if rv is not None:
+                return rv
+
+        # A RawTexture goes straight to the GPU, which never reads the border of a copied surface.
+        if isinstance(self.image, Image):
+            return self.image.load(copy=False)
+
         return self.image.load()
 
     def predict_files(self):
         return self.image.predict_files()
+
+
+# The identifier that starts every KTX2 file.
+KTX2_IDENTIFIER = b"\xabKTX 20\xbb\r\n\x1a\n"
+
+
+class CompressedImage:
+    """
+    The block-compressed mipmap levels of a KTX2 file, which load_texture uploads without decoding.
+    """
+
+    def __init__(
+        self, data: bytes, vk_format: int, width: int, height: int, levels: list[tuple[int, int]], premultiplied: bool
+    ):
+        self.data = data
+
+        # The Vulkan format number of the blocks.
+        self.vk_format = vk_format
+
+        self.width = width
+        self.height = height
+
+        # (offset, length) pairs into data, largest level first.
+        self.levels = levels
+
+        self.premultiplied = premultiplied
+
+        self.compressed_size = sum(length for _offset, length in levels)
+
+    def get_size(self) -> tuple[int, int]:
+        return (self.width, self.height)
+
+
+def load_ktx2(data: bytes, filename: str) -> CompressedImage:
+    """
+    Parses a 2D KTX2 file with one face, no array layers, and no supercompression.
+    """
+
+    if data[:12] != KTX2_IDENTIFIER:
+        raise Exception(f"{filename!r} is not a KTX2 file.")
+
+    header = struct.unpack_from("<9I", data, 12)
+    vk_format, _type_size, width, height, depth, layers, faces, level_count, scheme = header
+    dfd_offset, dfd_length = struct.unpack_from("<2I", data, 48)
+
+    if depth or layers or faces != 1 or scheme:
+        raise Exception(f"{filename!r} must be a 2D KTX2 texture with one face, no layers, and no supercompression.")
+
+    levels = []
+
+    for i in range(max(level_count, 1)):
+        offset, length, _uncompressed = struct.unpack_from("<3Q", data, 80 + 24 * i)
+
+        if offset + length > len(data):
+            raise Exception(f"{filename!r} is truncated.")
+
+        levels.append((offset, length))
+
+    # The flags byte of the basic data format descriptor, where bit 0 marks premultiplied alpha.
+    flags = data[dfd_offset + 15] if dfd_length >= 16 else 0
+
+    return CompressedImage(data, vk_format, width, height, levels, bool(flags & 1))
+
+
+def load_compressed_texture(filename: str, premultiply: bool) -> CompressedImage | None:
+    """
+    Returns the KTX2 file named like `filename` with a .ktx2 extension, or None if there isn't one or the GPU
+    can't use its format.
+    """
+
+    formats = getattr(getattr(renpy.display.draw, "texture_loader", None), "compressed_formats", None)
+
+    if not formats:
+        return None
+
+    fn = filename.rpartition(".")[0] + ".ktx2"
+
+    if not renpy.loader.loadable(fn, directory="images"):
+        return None
+
+    with renpy.loader.load(fn, directory="images") as f:
+        rv = load_ktx2(f.read(), fn)
+
+    if rv.vk_format not in formats:
+        return None
+
+    if max(rv.width, rv.height) > renpy.display.draw.info["max_texture_size"]:
+        return None
+
+    if rv.premultiplied != premultiply:
+        alpha = "premultiplied" if rv.premultiplied else "straight"
+        raise Exception(f"{fn!r} has {alpha} alpha, which does not match the premultiply setting of its texture.")
+
+    return rv
 
 
 def image(arg, loose=False, **properties):

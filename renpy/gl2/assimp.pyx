@@ -142,11 +142,6 @@ class MeshInfo:
     mesh: Mesh3
     "The mesh that's being loaded."
 
-    shaders: Iterable[str]
-    """
-    The shaders to use.
-    """
-
     uniforms: dict[str, object]
     """
     A dictionary of uniforms that are set by the material.
@@ -162,10 +157,9 @@ class MeshInfo:
     True of the mesh is two-sided, and should be rendered with backface culling disabled.
     """
 
-    def __init__(self, Loader loader, Mesh3 mesh, int material_index, textures: Iterable[str], shaders: Iterable[str]):
+    def __init__(self, Loader loader, Mesh3 mesh, int material_index, textures: Iterable[str]):
 
         self.mesh = mesh
-        self.shaders = shaders
 
         self.uniforms = loader.get_material_uniforms(material_index)
         self.texture_uniforms = loader.get_texture_uniforms(material_index)
@@ -345,8 +339,8 @@ class ModelData:
             log(f"    uniform {uniform_type} {u};{comment}")
 
 
-cache: collections.OrderedDict[GLTFModel, ModelData] = collections.OrderedDict()
-"Imported models, ordered from least to most recently loaded or rendered."
+cache: collections.OrderedDict[tuple, ModelData] = collections.OrderedDict()
+"Imported models by GLTFModel.cache_key, ordered from least to most recently loaded or rendered."
 
 cache_lock = threading.Lock()
 "Protects cache membership and recency without waiting for native imports."
@@ -374,9 +368,6 @@ cdef class Loader:
     cdef public bint tangents
     "True if tangents should be included in the mesh."
 
-    cdef public object shaders
-    "A shader or list of shaders to use."
-
     cdef public set uniforms
     "A list of the uniforms being set by materials."
 
@@ -391,17 +382,14 @@ cdef class Loader:
         self,
         model_data: ModelData,
         filename: str,
-        shaders: Iterable[str | Displayable],
         tangents: bool,
-        zoom: float,
-        report: bool) -> None:
+        zoom: float) -> None:
 
         if not renpy.loader.loadable(filename):
             raise FileNotFoundError(f"GLTFModel not loadable: {filename}")
 
         self.filename = filename
 
-        self.shaders = shaders
         self.tangents = tangents
         self.uniforms = set()
 
@@ -442,14 +430,10 @@ cdef class Loader:
             self.model_data.filename = filename
             self.model_data.mesh_info = list(self.mesh_info.values())
 
-            if report:
-                self.model_data.report()
-
             return self.model_data
 
         finally:
             self.mesh_info = { }
-            self.shaders = [ ]
             self.model_data = None
             self.uniforms = set()
 
@@ -676,46 +660,48 @@ cdef class Loader:
         cdef float *attribute = m.attribute
 
         cdef unsigned int i
-
-        for i in range(mesh.mNumVertices):
-            point[i].x = mesh.mVertices[i].x
-            point[i].y = mesh.mVertices[i].y
-            point[i].z = mesh.mVertices[i].z
-
-            # a_tex_coord
-            if mesh.mTextureCoords[0]:
-                attribute[0] = mesh.mTextureCoords[0][i].x
-                attribute[1] = mesh.mTextureCoords[0][i].y
-
-            # a_normal
-            if mesh.mNormals:
-                attribute[2] = mesh.mNormals[i].x
-                attribute[3] = mesh.mNormals[i].y
-                attribute[4] = mesh.mNormals[i].z
-
-            if self.tangents:
-                # a_tangent
-                if mesh.mTangents:
-                    attribute[5] = mesh.mTangents[i].x
-                    attribute[6] = mesh.mTangents[i].y
-                    attribute[7] = mesh.mTangents[i].z
-
-                # a_bitangent
-                if mesh.mBitangents:
-                    attribute[8] = mesh.mBitangents[i].x
-                    attribute[9] = mesh.mBitangents[i].y
-                    attribute[10] = mesh.mBitangents[i].z
-
-            attribute += stride
-
         cdef unsigned int *triangle = m.triangle
+        cdef bint tangents = self.tangents
 
-        for i in range(mesh.mNumFaces):
-            triangle[0] = mesh.mFaces[i].mIndices[0]
-            triangle[1] = mesh.mFaces[i].mIndices[1]
-            triangle[2] = mesh.mFaces[i].mIndices[2]
+        # The copies are plain C, so the main thread can draw while a preload thread imports.
+        with nogil:
+            for i in range(mesh.mNumVertices):
+                point[i].x = mesh.mVertices[i].x
+                point[i].y = mesh.mVertices[i].y
+                point[i].z = mesh.mVertices[i].z
 
-            triangle += 3
+                # a_tex_coord
+                if mesh.mTextureCoords[0]:
+                    attribute[0] = mesh.mTextureCoords[0][i].x
+                    attribute[1] = mesh.mTextureCoords[0][i].y
+
+                # a_normal
+                if mesh.mNormals:
+                    attribute[2] = mesh.mNormals[i].x
+                    attribute[3] = mesh.mNormals[i].y
+                    attribute[4] = mesh.mNormals[i].z
+
+                if tangents:
+                    # a_tangent
+                    if mesh.mTangents:
+                        attribute[5] = mesh.mTangents[i].x
+                        attribute[6] = mesh.mTangents[i].y
+                        attribute[7] = mesh.mTangents[i].z
+
+                    # a_bitangent
+                    if mesh.mBitangents:
+                        attribute[8] = mesh.mBitangents[i].x
+                        attribute[9] = mesh.mBitangents[i].y
+                        attribute[10] = mesh.mBitangents[i].z
+
+                attribute += stride
+
+            for i in range(mesh.mNumFaces):
+                triangle[0] = mesh.mFaces[i].mIndices[0]
+                triangle[1] = mesh.mFaces[i].mIndices[1]
+                triangle[2] = mesh.mFaces[i].mIndices[2]
+
+                triangle += 3
 
         m.point_version = 1
         m.attribute_version = 1
@@ -729,8 +715,7 @@ cdef class Loader:
             self,
             m,
             mesh.mMaterialIndex,
-            self.textures,
-            self.shaders)
+            self.textures)
 
         self.mesh_info[mesh_index] = info
         return info
@@ -840,39 +825,46 @@ class GLTFModel(Displayable):
                 raise ValueError(f"Unknown keyword argument {k!r} for GLTFModel. Uniforms must start with 'u_'.")
 
         if report:
-            self.load()
+            self.load().report()
             self.report = False
 
+    @property
+    def cache_key(self):
+        """
+        The import options that determine the imported data, so equal models share one import.
+        """
+
+        return (self.filename, self.tangents, self.zoom)
 
     def load(self):
         """
         Loads the AssimpModel, including its meshes and textures.
         """
 
+        key = self.cache_key
+
         with cache_lock:
-            model_data = cache.get(self)
+            model_data = cache.get(key)
             if model_data is not None:
-                cache.move_to_end(self)
+                cache.move_to_end(key)
                 return model_data
 
         with loader_lock:
             # Recheck under the import lock, without blocking cache hits on that lock.
             with cache_lock:
-                model_data = cache.get(self)
+                model_data = cache.get(key)
                 if model_data is not None:
-                    cache.move_to_end(self)
+                    cache.move_to_end(key)
                     return model_data
 
             model_data = ModelData()
             loader.load(
                 model_data,
                 self.filename,
-                self.shaders,
                 self.tangents,
-                self.zoom,
-                self.report)
+                self.zoom)
             with cache_lock:
-                cache[self] = model_data
+                cache[key] = model_data
 
         for i in model_data.mesh_info:
             for d in i.texture_uniforms.values():
@@ -885,6 +877,13 @@ class GLTFModel(Displayable):
         new_predicted.add(self)
 
         model_data = self.load()
+
+        textures = list(self.texture_uniforms.values())
+
+        for mi in model_data.mesh_info:
+            textures.extend(mi.texture_uniforms.values())
+
+        renpy.display.im.cache.get_textures(textures)
 
         rv = Render(0, 0)
 
@@ -903,7 +902,8 @@ class GLTFModel(Displayable):
             cr.reverse = bi.reverse
             cr.forward = bi.forward
 
-            for i in mi.shaders:
+            # Imports are shared between models, so the shaders come from this one.
+            for i in self.shaders:
                 cr.add_shader(i)
 
             for k, v in mi.uniforms.items():
@@ -936,7 +936,7 @@ class GLTFModel(Displayable):
 
     def visit(self):
         with cache_lock:
-            model_data = cache.get(self)
+            model_data = cache.get(self.cache_key)
         if model_data is not None:
             return [ j for i in model_data.mesh_info for j in i.texture_uniforms.values() ]
         else:
@@ -979,9 +979,11 @@ def preload():
     if predicted is None:
         return
 
+    predicted_keys = { i.cache_key for i in predicted }
+
     with cache_lock:
         budget = max(0, renpy.config.gltf_model_cache_size_mb) * 1024 * 1024
-        inactive = [i for i in cache if i not in predicted]
+        inactive = [i for i in cache if i not in predicted_keys]
         retained = sum(cache[i].memory_size for i in inactive)
         for i in inactive:
             if budget and retained <= budget:

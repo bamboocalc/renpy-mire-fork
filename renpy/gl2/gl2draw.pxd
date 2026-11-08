@@ -145,6 +145,9 @@ cdef class GL2DrawingContext:
     # The clipping Polygon
     cdef Polygon clip_polygon
 
+    # The window rectangle (x, y, width, height) that replaces clip_polygon below a projection, or None.
+    cdef object scissor
+
     # A tuple giving the names of shaders that will be applied to the model.
     cdef tuple shaders
 
@@ -175,6 +178,8 @@ cdef class GL2DrawingContext:
     cdef void correct_pixel_perfect(self)
 
     cdef object draw_model(self, model)
+
+    cdef void clip_to_scissor(self)
 
     cdef void set_text_rect(self, Render r)
 
