@@ -55,6 +55,8 @@ cdef class TextureLoader:
     # The KTX2 Vulkan format numbers this GPU can upload, as a set.
     cdef public object compressed_formats
 
+    cdef public dict upload_stats
+
 
 cdef class GLTexture(GL2Model):
 
@@ -70,6 +72,9 @@ cdef class GLTexture(GL2Model):
 
     # The CompressedImage to upload instead of a surface, or None.
     cdef object compressed
+
+    cdef bint uploading
+    cdef int upload_y
 
     # The texture loader associated with this texture.
     cdef TextureLoader loader

@@ -13,6 +13,16 @@ Changelog (Ren'Py 7.x-)
 3D Model Loading
 ----------------
 
+GLTF models can opt into camera visibility culling with ``frustum_cull=True``.
+The optional :var:`config.texture_upload_chunk_size` divides predicted opaque
+and premultiplied texture uploads into cooperative steps. Both options retain
+the previous behavior by default. Engine diagnostics and a source-tree texture
+reporting tool help identify upload stalls and scene texture working sets.
+An immediately needed image finishes its own uploads without draining the
+upload queue for unrelated predicted images.
+Prediction pauses wait for the final decode batch and queued texture uploads,
+while continuing to yield to animated loading screens.
+
 GLTF model import releases the Python global interpreter lock during native
 Assimp loading and skips tangent generation when tangents are not requested.
 Concurrent requests for the same model share the completed import. GLTFModels

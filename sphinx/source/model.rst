@@ -757,6 +757,48 @@ on a single light source, meant for experimentation until better shaders are cre
 GLTFModel does not support transparent surfaces well. While the discard command above emulates
 transparency, the ordering is a bit wrong and can lead to artifacts.
 
+Visibility and texture diagnostics
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``GLTFModel(..., frustum_cull=True)`` skips meshes whose imported bounding boxes
+are wholly outside the camera's view. Bounds that intersect the view remain
+visible. Leave this disabled for shaders that move vertices outside those
+boxes. Culling reduces geometry submission; it does not unload textures or
+change which textures prediction loads.
+
+The source tree includes ``scripts/gltf_texture_report.py``, which requires
+Pillow. Pass external-texture GLB files to report their texture sizes, shared
+resources, full RGBA mip chains, and the combined working sets of scene pairs::
+
+    python scripts/gltf_texture_report.py day.glb night.glb --output textures.json
+
+The report identifies single-color RGB/RGBA maps without metadata as candidates
+for a separate asset review. It does not modify source files. These are asset
+estimates, not process or GPU memory measurements.
+Byte-identical images are counted once. Aliases with different filenames need
+to share a filename to share an image-cache entry.
+
+For engine profiling, ``config.debug_image_cache = True`` enables cache counters
+and CPU timings for decoding, upload steps, and mipmap submission. Internal
+diagnostic snapshots are available after the renderer starts::
+
+    import renpy.display.im as _im
+    import renpy.display as _display
+    import renpy.gl2.assimp as _assimp
+    import renpy.gl2.gl2draw as _gl2draw
+
+    _im.cache.get_diagnostics()
+    _assimp.get_diagnostics()
+    _gl2draw.model_stats.copy()
+    _display.draw.texture_loader.get_diagnostics()
+
+Cache snapshots report files, cache accounting, current-generation protection,
+and whether GPU upload has completed when that information is available.
+Upload snapshots include renderer-wide texture allocations and pending work.
+The counters accumulate over the lifetime of their cache or renderer. Compare
+snapshots around an operation, and repeat timing runs with profiling disabled.
+Submission timings do not measure GPU execution or display presentation.
+
 
 
 Model Displayable

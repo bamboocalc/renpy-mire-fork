@@ -5,6 +5,7 @@ import re
 
 
 OPTIONAL_FUNCTIONS = {
+    "glCompressedTexImage2D",
     "glGetProgramBinary",
     "glProgramBinary",
     "glProgramParameteri",

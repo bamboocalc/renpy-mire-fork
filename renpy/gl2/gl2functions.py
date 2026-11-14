@@ -68,6 +68,7 @@ required_functions = [
     "glTexImage2D",
     "glTexParameterf",
     "glTexParameteri",
+    "glTexSubImage2D",
     "glUniform1f",
     "glUniform1fv",
     "glUniform1i",

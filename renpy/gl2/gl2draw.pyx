@@ -1319,6 +1319,12 @@ cdef class GL2Draw:
         for c in r.children:
             self.load_all_textures(c[0], reverse)
 
+        # Uniform-only textures need to finish before a framebuffer caches this draw.
+        if r.uniforms:
+            for value in r.uniforms.values():
+                if isinstance(value, GL2Model):
+                    value.load()
+
         # If we have a mesh (or mesh=True), create the GL2Model.
         if r.mesh:
 
@@ -1837,6 +1843,12 @@ cdef class GL2DrawingContext:
         if model.reverse is not IDENTITY:
             self.model_matrix.inplace_multiply(model.reverse)
 
+        if self.properties.get("frustum_cull", False) and isinstance(mesh, Mesh3):
+            if not (<Mesh3>mesh).is_visible(self.projectionview_matrix * self.model_matrix):
+                if renpy.config.debug_image_cache:
+                    model_stats["culled"] += 1
+                return
+
         if model.shaders:
             if self.shaders:
                 self.shaders = self.shaders + model.shaders
@@ -1852,6 +1864,9 @@ cdef class GL2DrawingContext:
 
         cdef Program program = gl2draw.shader_cache.get(self.shaders)
 
+        if renpy.config.debug_image_cache:
+            model_stats["drawn"] += 1
+            model_stats["triangles"] += mesh.triangles
         program.draw(self, model, mesh)
 
     cdef void clip_to_scissor(self):
@@ -2112,6 +2127,8 @@ cdef class GL2DrawingContext:
 
 # The root of allocated linked list of GL2DrawingContexts.
 root_context = GL2DrawingContext()
+
+model_stats = { "drawn": 0, "culled": 0, "triangles": 0 }
 
 
 def draw_render(what, int drawable_width, int drawable_height, Matrix projection, GLStateCache state_cache, invert_front_face: bool = False):

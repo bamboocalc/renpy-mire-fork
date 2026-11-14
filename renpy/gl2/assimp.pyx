@@ -23,6 +23,7 @@
 import collections
 import functools
 import threading
+from libc.math cimport fminf, fmaxf
 
 from typing import Iterable, Literal
 
@@ -132,6 +133,21 @@ def free_memory():
     with loader_lock:
         with cache_lock:
             cache.clear()
+
+
+def get_diagnostics():
+    """Snapshots imported mesh storage, excluding decoded images and GPU buffers."""
+
+    predicted_keys = { i.cache_key for i in predicted } if predicted is not None else set()
+    with cache_lock:
+        models = [
+            { "filename": key[0], "bytes": data.memory_size, "predicted": key in predicted_keys,
+              "meshes": len(data.mesh_info), "draws": len(data.blit_info),
+              "triangles": sum(mi.mesh.triangles for mi in data.mesh_info) }
+            for key, data in cache.items()
+        ]
+    return { "models": models, "native_bytes": sum(m["bytes"] for m in models),
+        "inactive_bytes": sum(m["bytes"] for m in models if not m["predicted"]) }
 
 
 class MeshInfo:
@@ -662,6 +678,8 @@ cdef class Loader:
         cdef unsigned int i
         cdef unsigned int *triangle = m.triangle
         cdef bint tangents = self.tangents
+        cdef float minx = float("inf"), miny = minx, minz = minx
+        cdef float maxx = -minx, maxy = maxx, maxz = maxx
 
         # The copies are plain C, so the main thread can draw while a preload thread imports.
         with nogil:
@@ -669,6 +687,12 @@ cdef class Loader:
                 point[i].x = mesh.mVertices[i].x
                 point[i].y = mesh.mVertices[i].y
                 point[i].z = mesh.mVertices[i].z
+                minx = fminf(minx, point[i].x)
+                miny = fminf(miny, point[i].y)
+                minz = fminf(minz, point[i].z)
+                maxx = fmaxf(maxx, point[i].x)
+                maxy = fmaxf(maxy, point[i].y)
+                maxz = fmaxf(maxz, point[i].z)
 
                 # a_tex_coord
                 if mesh.mTextureCoords[0]:
@@ -704,6 +728,7 @@ cdef class Loader:
                 triangle += 3
 
         m.point_version = 1
+        m.bounds = (minx, miny, minz, maxx, maxy, maxz)
         m.attribute_version = 1
         m.triangle_version = 1
 
@@ -737,8 +762,7 @@ class GLTFModel(Displayable):
     is loaded at the size found in the file that contains it. If required, the `zoom` may be used to scale it.
 
     When multiple models are in use, the ``gl_depth True`` property should be supplied to the camera, so that
-    depth testing is enabled. Ren'Py does not currently perform any culling of the model, so it's
-    important to use models simple enough to be completely rendered.
+    depth testing is enabled. By default every mesh is submitted for drawing.
 
     `filename`
         The filename of the model to display.
@@ -756,10 +780,16 @@ class GLTFModel(Displayable):
     `report`
         If true, a report of the model will be printed to the log. This includes the uniforms that are used by
         the model.
+
+    `frustum_cull`
+        If True, skips meshes whose imported bounds are outside the camera's view.
+        Leave False for shaders that move vertices beyond those bounds.
     """
 
     filename: str
     "The filename of the model to display."
+
+    frustum_cull = False
 
     shaders: Iterable[str]
     "The shaders to use."
@@ -792,6 +822,8 @@ class GLTFModel(Displayable):
         tangents: bool = False,
         zoom: float = 1.0,
         report: bool = False,
+        *,
+        frustum_cull: bool = False,
         **kwargs):
 
         super().__init__()
@@ -809,6 +841,7 @@ class GLTFModel(Displayable):
         self.tangents = tangents
         self.zoom = zoom
         self.report = report
+        self.frustum_cull = frustum_cull
 
         self.uniforms = { }
         self.texture_uniforms = { }
@@ -899,6 +932,8 @@ class GLTFModel(Displayable):
 
             cr = Render(0, 0)
             cr.mesh = mi.mesh
+            if self.frustum_cull:
+                cr.add_property("frustum_cull", True)
             cr.reverse = bi.reverse
             cr.forward = bi.forward
 

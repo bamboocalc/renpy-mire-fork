@@ -89,6 +89,9 @@ cdef class TextureLoader:
         self.texture_load_queue = weakref.WeakSet()
         self.draw = draw
         self.compressed_formats = set()
+        self.upload_stats = { "steps": 0, "seconds": 0.0, "max_seconds": 0.0,
+            "mipmap_seconds": 0.0, "mipmap_max_seconds": 0.0,
+            "allocation_seconds": 0.0, "allocation_max_seconds": 0.0 }
 
     def init(self):
 
@@ -132,6 +135,12 @@ cdef class TextureLoader:
         """
 
         return self.total_texture_size, len(self.allocated)
+
+    def get_diagnostics(self):
+        """Snapshots live GPU allocations and pending uploads without retaining their textures."""
+
+        return dict(self.upload_stats, allocated_bytes=self.total_texture_size,
+            allocated_textures=len(self.allocated), pending_textures=len(self.texture_load_queue))
 
     def load_one_surface(self, surf, bl, bt, br, bb, properties):
         """
@@ -284,7 +293,9 @@ cdef class TextureLoader:
                 return False
 
             if not tex.loaded:
-                tex.load()
+                tex.load(partial=True)
+                if not tex.loaded:
+                    self.texture_load_queue.add(tex)
                 return True
 
         return False
@@ -755,7 +766,7 @@ cdef class GLTexture(GL2Model):
         self.loaded = True
         self.surface = None
 
-    def load_gltexture_premultiplied(GLTexture self):
+    def load_gltexture_premultiplied(GLTexture self, partial=False):
         """
         Loads this texture. When it's loaded, generation and number are set,
         and the texture is ready to use.
@@ -765,6 +776,9 @@ cdef class GLTexture(GL2Model):
         cdef Program program
         cdef SDL_Surface *s
         cdef GLuint pixel_buffer
+        cdef int rows
+        cdef Py_ssize_t chunk_size = max(0, renpy.config.texture_upload_chunk_size)
+        cdef unsigned char *pixels
 
         if self.loaded:
             return
@@ -772,6 +786,46 @@ cdef class GLTexture(GL2Model):
         draw = self.loader.draw
 
         s = self.surface.sdl_surface
+
+        if chunk_size or self.uploading:
+            if not self.uploading:
+                glGenTextures(1, &premultiplied)
+                glActiveTexture(GL_TEXTURE0)
+                self.allocate_texture(premultiplied, self.width, self.height, self.properties)
+                self.number = premultiplied
+                self.loader.allocated.add(self.number)
+                self.uploading = True
+                self.upload_y = 0
+
+            while self.upload_y < self.height:
+                rows = self.height - self.upload_y
+                if chunk_size:
+                    rows = min(rows, max(1, chunk_size // s.pitch))
+                pixels = <unsigned char *>s.pixels + self.upload_y * s.pitch
+                glActiveTexture(GL_TEXTURE0)
+                glBindTexture(GL_TEXTURE_2D, self.number)
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, s.pitch // 4)
+
+                # Keep the Android alignment workaround and the ANGLE/web fallback.
+                if not renpy.emscripten and not draw.angle:
+                    glGenBuffers(1, &pixel_buffer)
+                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixel_buffer)
+                    glBufferData(GL_PIXEL_UNPACK_BUFFER, (rows - 1) * s.pitch + self.width * 4, pixels, GL_STREAM_DRAW)
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, self.upload_y, self.width, rows, GL_RGBA, GL_UNSIGNED_BYTE, NULL)
+                    glDeleteBuffers(1, &pixel_buffer)
+                else:
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, self.upload_y, self.width, rows, GL_RGBA, GL_UNSIGNED_BYTE, pixels)
+
+                self.upload_y += rows
+                if partial:
+                    return
+
+            # Mipmap generation is a separate cooperative step after the final rows.
+            self.mipmap_texture(self.number, self.width, self.height, self.properties)
+            self.uploading = False
+            self.loaded = True
+            self.surface = None
+            return
 
         glGenTextures(1, &premultiplied)
 
@@ -818,6 +872,8 @@ cdef class GLTexture(GL2Model):
         Allocates the VRAM required to store `tex`, which is a `tw` x `th`
         texture, including all mipmap levels.
         """
+
+        started = time.perf_counter() if renpy.config.debug_image_cache else 0.0
 
         # It's not 100% clear why we need this function, but it does seem to
         # significantly speed things up on my GeForce GTX 1060 3GB/PCIe/SSE2.
@@ -875,6 +931,12 @@ cdef class GLTexture(GL2Model):
             if level > max_level:
                 break
 
+        if started:
+            elapsed = time.perf_counter() - started
+            self.loader.upload_stats["allocation_seconds"] += elapsed
+            self.loader.upload_stats["allocation_max_seconds"] = max(
+                self.loader.upload_stats["allocation_max_seconds"], elapsed)
+
     def mipmap_texture(GLTexture self, GLuint tex, int tw, int th, properties={}):
         """
         Generate the mipmaps for a texture.
@@ -897,7 +959,12 @@ cdef class GLTexture(GL2Model):
         if not self.loader.draw.state_cache.core_profile:
             glHint(GL_GENERATE_MIPMAP_HINT, GL_NICEST)
 
+        started = time.perf_counter() if renpy.config.debug_image_cache else 0.0
         glGenerateMipmap(GL_TEXTURE_2D)
+        if started:
+            elapsed = time.perf_counter() - started
+            self.loader.upload_stats["mipmap_seconds"] += elapsed
+            self.loader.upload_stats["mipmap_max_seconds"] = max(self.loader.upload_stats["mipmap_max_seconds"], elapsed)
 
     def add_mipmap(self):
         """
@@ -920,7 +987,7 @@ cdef class GLTexture(GL2Model):
 
     def __del__(self):
         try:
-            if self.loaded:
+            if self.loaded or self.uploading:
                 self.loader.free_list.append(self.number)
 
                 if "compressed_size" in self.properties:
@@ -937,18 +1004,29 @@ cdef class GLTexture(GL2Model):
         except (TypeError, AttributeError):
             pass # Let's not error on shutdown.
 
-    def load(self):
+    def load(self, partial=False):
 
         # Render targets are loaded, and have no surface.
         if self.loaded:
             return
 
-        if self.compressed is not None:
-            self.load_gltexture_compressed()
-        elif self.properties.get("premultiplied", False) or (self.surface is not None and self.surface.opaque):
-            self.load_gltexture_premultiplied()
-        else:
-            self.load_gltexture()
+        started = time.perf_counter() if renpy.config.debug_image_cache else 0.0
+        try:
+            if self.compressed is not None:
+                self.load_gltexture_compressed()
+            elif self.properties.get("premultiplied", False) or (self.surface is not None and self.surface.opaque):
+                self.load_gltexture_premultiplied(partial)
+            else:
+                self.load_gltexture()
+        finally:
+            if self.loaded:
+                self.loader.texture_load_queue.discard(self)
+            if started:
+                elapsed = time.perf_counter() - started
+                stats = self.loader.upload_stats
+                stats["steps"] += 1
+                stats["seconds"] += elapsed
+                stats["max_seconds"] = max(stats["max_seconds"], elapsed)
 
     cpdef subsurface(self, rect):
         rv = GL2Model.subsurface(self, rect)

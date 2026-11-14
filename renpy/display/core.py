@@ -2440,7 +2440,7 @@ class Interface:
 
         while renpy.asynctask.run_for_ns(minimum_prediction_time_ns):
 
-            if not expensive and not self.force_prediction:
+            if not expensive:
                 break
 
             if self.event_peek(False):
@@ -3145,9 +3145,11 @@ class Interface:
 
                 # Decide to run prediction.
                 if did_redraw and (can_block or (frame >= renpy.config.idle_frame) or (self.force_prediction)):
+                    # A prediction pause requests timeout(0); animation redraw deadlines still take priority.
                     expensive = not (
-                        needs_redraw or (_redraw_in < 0.2) or (_timeout_in < 0.2) or renpy.display.video.playing()
-                    ) or self.force_prediction
+                        needs_redraw or (_redraw_in < 0.2)
+                        or ((_timeout_in < 0.2) and not self.force_prediction) or renpy.display.video.playing()
+                    )
 
                     self.run_tasks(expensive)
 

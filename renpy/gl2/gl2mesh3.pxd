@@ -21,6 +21,7 @@
 
 from renpy.gl2.gl2mesh cimport Mesh
 from renpy.gl2.gl2polygon cimport Polygon
+from renpy.display.matrix cimport Matrix
 
 # Represents a point in three dimensional space.
 cdef struct Point3:
@@ -32,5 +33,9 @@ cdef class Mesh3(Mesh):
 
     # The geometry of the points.
     cdef Point3 *point
+
+    cdef public object bounds
+
+    cpdef bint is_visible(self, Matrix transform)
 
     cpdef Mesh3 crop(Mesh3 self, Polygon p)

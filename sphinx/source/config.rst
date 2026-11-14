@@ -1747,6 +1747,22 @@ Showing Images
     Python object overhead. Decoded images and GPU textures use the separate
     image cache controlled by :var:`config.image_cache_size_mb`.
 
+.. var:: config.texture_upload_chunk_size = 0
+
+    The maximum number of source bytes in a cooperative texture upload step.
+    Zero uploads a whole texture. For example, ``4 * 1024 * 1024`` uploads
+    about four megabytes per step. A step always uploads at least one row.
+
+    This applies to opaque images and images that are already premultiplied.
+    Compressed textures and images requiring GPU premultiplication keep their
+    existing upload path. Mipmap generation follows the last chunk as a
+    separate step. Allocation and mipmap generation can still stall, so this
+    setting does not guarantee a maximum frame time.
+
+    Prediction can yield between steps. When a texture is needed for drawing,
+    its remaining steps finish before it is sampled; incomplete textures are
+    never displayed. Configure this during init.
+
 .. var:: config.keep_running_transform = True
 
     If True, showing an image without supplying a transform or ATL

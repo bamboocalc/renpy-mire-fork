@@ -21,6 +21,8 @@
 
 """Tests for the cooperative generator tasks run by the interaction loop."""
 
+import threading
+
 import pytest
 
 import renpy
@@ -115,6 +117,9 @@ class TestPreloadPass:
         """Provide a Cache without running its constructor, with no preloads and no decode pool."""
         cache = Cache.__new__(Cache)
         cache.preloads = []
+        cache.preload_lock = threading.Condition()
+        cache.preload_generation = 0
+        cache.preload_completed = 0
         cache.keep_preloading = False
         cache.get_decode_pool = lambda: None
         cache.cleanout = lambda: True

@@ -22,7 +22,7 @@
 from __future__ import print_function
 
 from libc.stdlib cimport malloc, free
-from libc.math cimport hypot
+from libc.math cimport hypot, fabsf, isfinite
 
 from renpy.gl2.gl2polygon cimport Polygon, Point2
 from renpy.gl2.gl2mesh cimport Mesh, AttributeLayout
@@ -221,6 +221,37 @@ cdef class Mesh3(Mesh):
             rv.append((self.point[i].x, self.point[i].y, self.point[i].z, 1.0))
 
         return rv
+
+    cpdef bint is_visible(Mesh3 self, Matrix transform):
+        """Conservatively tests imported bounds against the six homogeneous clip planes."""
+
+        if self.bounds is None:
+            return True
+
+        cdef float x, y, z, w, margin
+        cdef float x0, y0, z0, x1, y1, z1
+        cdef int i, outside, common = 63
+        x0, y0, z0, x1, y1, z1 = self.bounds
+
+        for i in range(8):
+            transform.transform4(&x, &y, &z, &w,
+                x1 if i & 1 else x0, y1 if i & 2 else y0, z1 if i & 4 else z0, 1.0)
+            if not (isfinite(x) and isfinite(y) and isfinite(z) and isfinite(w)):
+                return True
+
+            margin = 0.00001 * (fabsf(w) + 1.0)
+            outside = 0
+            if x < -w - margin: outside |= 1
+            if x > w + margin: outside |= 2
+            if y < -w - margin: outside |= 4
+            if y > w + margin: outside |= 8
+            if z < -w - margin: outside |= 16
+            if z > w + margin: outside |= 32
+            common &= outside
+            if not common:
+                return True
+
+        return False
 
     def get_point0(Mesh3 self):
         """

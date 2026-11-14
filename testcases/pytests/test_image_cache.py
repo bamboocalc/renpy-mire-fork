@@ -7,6 +7,8 @@ import pytest
 import renpy
 from renpy.display import im
 from renpy.display.render import Render
+from renpy.gl2.gl2model import GL2Model
+from renpy.gl2.gl2texture import Texture, TextureLoader
 
 pytestmark = pytest.mark.usefixtures("surface_deallocation")
 
@@ -46,6 +48,30 @@ def assert_uncached(cache):
 
     assert cache.cache == {}
     assert cache.get_total_size() == 0
+
+
+def test_diagnostics_distinguish_reuse_decode_and_eviction(mocker, cache):
+    """A residency snapshot explains a reused texture and releases its accounting after eviction."""
+
+    mocker.patch.object(renpy.config, "debug_image_cache", True)
+    cache.cache_limit = 1024
+    image = im.Null()
+    cache.get(image, texture=True)
+    cache.get(image, texture=True)
+
+    snapshot = cache.get_diagnostics()
+    assert snapshot["hits"] == 1
+    assert snapshot["decodes"] == 1
+    assert snapshot["cache_bytes"] == cache.get_total_size() * 4
+    assert snapshot["current_bytes"] == snapshot["cache_bytes"]
+    assert snapshot["entries"][0]["texture_created"]
+
+    cache.kill(cache.cache[image])
+    after = cache.get_diagnostics()
+    assert after["evictions"] == 1
+    assert after["cache_bytes"] == 0
+    assert after["entries"] == []
+    assert snapshot["entries"]
 
 
 @pytest.mark.parametrize("cache_surfaces", [False, True])
@@ -292,12 +318,110 @@ def test_get_textures_decodes_on_the_pool_and_uploads(mocker, cache, draw):
 
     pool = ThreadPoolExecutor(max_workers=2)
     mocker.patch.object(cache, "get_decode_pool", return_value=pool)
-    images = [im.Null(), im.Null()]
+    images = [im.Null(mipmap=True), im.Null(mipmap=False)]
+    textures = []
+
+    def load_texture(surface, **kwargs):
+        texture = RecordingTexture()
+        textures.append(texture)
+        return texture
+
+    draw.load_texture.side_effect = load_texture
 
     try:
-        cache.get_textures(images + [Render(1, 1)])
+        cache.get_textures(images + images + [Render(1, 1)])
     finally:
         pool.shutdown()
 
     assert all(cache.cache[i].texture is not None for i in images)
-    assert draw.ready_one_texture.call_count == len(images)
+    assert len(textures) == 2
+    assert all(t.upload_threads == [threading.current_thread()] for t in textures)
+    draw.ready_one_texture.assert_not_called()
+
+
+class RecordingTexture(GL2Model):
+    """Records upload requests without needing a GPU or a live graphics context."""
+
+    def __init__(self):
+        super().__init__((1, 1), None, ())
+        self.upload_threads = []
+
+    def load(self):
+        self.upload_threads.append(threading.current_thread())
+
+
+def test_demand_does_not_drain_unrelated_predicted_uploads(cache, draw):
+    """An immediately needed image must not wait for the next scene's queued GPU uploads."""
+
+    requested = RecordingTexture()
+    draw.load_texture.side_effect = lambda *args, **kwargs: requested
+    draw.ready_one_texture.side_effect = AssertionError("Unrelated prediction queue was drained")
+
+    assert cache.get(im.Null(), texture=True) is requested
+    assert requested.upload_threads == [threading.current_thread()]
+    draw.ready_one_texture.assert_not_called()
+
+
+def test_parallel_texture_loading_preserves_control_flow(mocker, cache):
+    """A control-flow exception from a worker must reach the caller instead of being treated as a failed decode."""
+
+    mocker.patch.object(cache, "preload_texture", side_effect=renpy.game.JumpException("target"))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        mocker.patch.object(cache, "get_decode_pool", return_value=pool)
+        with pytest.raises(renpy.game.JumpException, match="target"):
+            cache.get_textures([im.Null(mipmap=True), im.Null(mipmap=False)])
+
+
+def test_demand_finishes_each_tile_of_a_large_image(cache, draw):
+    """A texture split by the GPU size limit finishes all its tiles on the requesting thread."""
+
+    first, second = RecordingTexture(), RecordingTexture()
+    tiled = Render(2, 1)
+    tiled.blit(first, (0, 0))
+    tiled.blit(second, (1, 0))
+    draw.load_texture.side_effect = lambda *args, **kwargs: tiled
+
+    assert cache.get(im.Null(), texture=True) is tiled
+    assert first.upload_threads == second.upload_threads == [threading.current_thread()]
+    draw.ready_one_texture.assert_not_called()
+
+
+def test_prediction_waits_for_the_last_decode_batch_and_new_requests(mocker, cache):
+    """An empty input queue is not completion while its last batch or a newer prediction request is pending."""
+
+    image = im.Null()
+    started, release, _calls = slow_loader(mocker, image)
+    mocker.patch("renpy.gl2.assimp.preload")
+    cache.cache_limit = 1024
+    cache.decode_pool_workers = 1
+    cache.preload_image(image)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        mocker.patch.object(cache, "get_decode_pool", return_value=pool)
+        future = pool.submit(lambda: list(cache.preload_thread_pass()))
+        try:
+            assert started.wait(5)
+            assert not cache.preloads
+            assert not cache.done()
+            cache.start_prediction()
+        finally:
+            release.set()
+        future.result(5)
+
+    assert not cache.done()
+    list(cache.preload_thread_pass())
+    assert cache.done()
+
+
+def test_prediction_waits_for_pending_gpu_uploads(cache, draw):
+    """A queued texture is CPU-ready but must not end prediction until its GPU work is finished or discarded."""
+
+    loader = TextureLoader(None)
+    draw.texture_loader = loader
+    texture = Texture((1, 1), loader)
+    surface = renpy.pygame.Surface((1, 1))
+    texture.from_surface(surface, {"mipmap": False})
+
+    assert not cache.done()
+    del texture
+    assert cache.done()

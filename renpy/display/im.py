@@ -93,6 +93,7 @@ class Cache:
 
         # The size of all entries in the cache, in pixels.
         self.cache_size: int = 0
+        self.diagnostics = { "hits": 0, "decodes": 0, "evictions": 0, "decode_seconds": 0.0 }
 
         # A list of Image objects that we want to preload.
         self.preloads: list[ImageBase] = []
@@ -108,6 +109,8 @@ class Cache:
 
         # A lock that must be held to notify the preload thread.
         self.preload_lock = threading.Condition()
+        self.preload_generation = 0
+        self.preload_completed = 0
 
         # Is the preload_thread alive?
         self.keep_preloading = True
@@ -148,11 +151,15 @@ class Cache:
 
     def done(self) -> bool:
         """
-        Returns true if the cache does not have any images to preload.
+        Returns true when requested preload passes and queued GPU uploads have finished.
         """
 
         with self.preload_lock:
-            return not self.preloads
+            if self.preloads or self.preload_generation != self.preload_completed:
+                return False
+
+        loader = getattr(renpy.display.draw, "texture_loader", None)
+        return not isinstance(loader, renpy.gl2.gl2texture.TextureLoader) or not loader.get_diagnostics()["pending_textures"]
 
     def get_total_size(self) -> int:
         """
@@ -174,6 +181,20 @@ class Cache:
             rv = sum(i.size() for i in self.cache.values() if i.time > start)
 
         return rv
+
+    def get_diagnostics(self) -> dict:
+        """Snapshots cache accounting and residency; timings require debug_image_cache."""
+
+        with self.lock:
+            entries = [
+                { "files": list(ce.what.predict_files()), "bytes": ce.size() * 4,
+                  "current": ce.time == self.time, "texture_created": ce.texture is not None,
+                  "gpu_loaded": getattr(ce.texture, "loaded", None) }
+                for ce in self.cache.values()
+            ]
+            return dict(self.diagnostics, cache_bytes=self.cache_size * 4, limit_bytes=self.cache_limit * 4,
+                current_bytes=sum(e["bytes"] for e in entries if e["current"]), entries=entries,
+                pending_decodes=len(self.loading), queued_images=len(self.preloads))
 
     def init(self):
         """
@@ -324,22 +345,35 @@ class Cache:
 
         pool = self.get_decode_pool()
 
-        missing = [
+        missing = list(dict.fromkeys(
             i for i in images if isinstance(i, ImageBase) and ((ce := self.cache.get(i)) is None or ce.texture is None)
-        ]
+        ))
 
         if pool is None or len(missing) < 2:
             return
 
-        for future in as_completed([pool.submit(self.preload_texture, i) for i in missing]):
+        futures = {pool.submit(self.preload_texture, i): i for i in missing}
+        for future in as_completed(futures):
             try:
                 future.result()
+            except renpy.game.CONTROL_EXCEPTIONS:
+                raise
             except Exception:
                 # The render loads the image again on this thread, which reports the error.
-                pass
+                continue
 
-            while renpy.display.draw.ready_one_texture():
-                pass
+            ce = self.cache.get(futures[future])
+            if ce is not None and ce.texture is not None:
+                self._ready_texture(ce.texture)
+
+    def _ready_texture(self, texture):
+        """Finishes demanded textures without draining unrelated prediction uploads."""
+
+        if isinstance(texture, renpy.gl2.gl2model.GL2Model):
+            texture.load()
+        elif isinstance(texture, renpy.display.render.Render):
+            for child, _x, _y, _focus, _main in texture.children:
+                self._ready_texture(child)
 
     def _get(self, image: "ImageBase", predict: bool = False, texture: bool = False, render: bool = False) -> Any:
         if render:
@@ -355,6 +389,9 @@ class Cache:
         if ce is not None:
             ce.time = self.time
 
+            if renpy.config.debug_image_cache and (ce.surf is not None or (texture and ce.texture is not None)):
+                self.diagnostics["hits"] += 1
+
             if texture and (ce.texture is not None):
                 if predict:
                     return None
@@ -369,11 +406,16 @@ class Cache:
 
         # Otherwise, we load the image ourselves.
         if ce is None:
+            started = time.perf_counter() if renpy.config.debug_image_cache else 0.0
             if not predict:
                 with renpy.game.ExceptionInfo(f"While loading {image!r}:"):
                     surf = image.load()
             else:
                 surf = image.load()
+
+            if started:
+                self.diagnostics["decodes"] += 1
+                self.diagnostics["decode_seconds"] += time.perf_counter() - started
 
             w, h = size = surf.get_size()
 
@@ -433,8 +475,7 @@ class Cache:
                 # This was loaded while predicting images for immediate use,
                 # so get it onto the GPU.
                 if not predict and renpy.display.draw is not None:
-                    while renpy.display.draw.ready_one_texture():
-                        pass
+                    self._ready_texture(ce.texture)
 
                 if predict:
                     wake_texture_upload()
@@ -470,6 +511,8 @@ class Cache:
             if self.cache.get(ce.what) is ce:
                 del self.cache[ce.what]
                 self.cache_size -= ce.size()
+                if renpy.config.debug_image_cache:
+                    self.diagnostics["evictions"] += 1
 
         if renpy.config.debug_image_cache:
             renpy.display.ic_log.write(f"Removed {ce.what!r}")
@@ -560,6 +603,7 @@ class Cache:
 
         if not in_cache:
             with self.preload_lock:
+                self.preload_generation += 1
                 self.preload_lock.notify()
 
         if in_cache and renpy.config.debug_image_cache:
@@ -572,6 +616,7 @@ class Cache:
         """
 
         with self.preload_lock:
+            self.preload_generation += 1
             self.preload_lock.notify()
 
     def get_decode_pool(self) -> ThreadPoolExecutor | None:
@@ -605,32 +650,42 @@ class Cache:
 
     def preload_thread_main(self):
         while self.keep_preloading:
-            self.preload_lock.acquire()
-            self.preload_lock.wait()
-            self.preload_lock.release()
+            with self.preload_lock:
+                self.preload_lock.wait_for(
+                    lambda: not self.keep_preloading or self.preload_generation != self.preload_completed)
+                if not self.keep_preloading:
+                    return
 
             renpy.asynctask.run_sync(self.preload_thread_pass())
 
     def preload_thread_pass(self):
-        renpy.gl2.assimp.preload()
-        if renpy.emscripten:
-            yield from renpy.display.predict.predict_sleep()
+        with self.preload_lock:
+            generation = self.preload_generation
 
-        pool = self.get_decode_pool()
-
-        while self.preloads and self.keep_preloading:
-
-            if pool is None:
-                self._preload_thread_pass_serial()  # Serial decoding
-            else:
-                self._preload_thread_pass_parallel(pool)  # Parallel decoding
-
+        try:
+            renpy.gl2.assimp.preload()
             if renpy.emscripten:
                 yield from renpy.display.predict.predict_sleep()
 
-        self.cleanout()
-        if renpy.emscripten:
-            yield from renpy.display.predict.predict_sleep()
+            pool = self.get_decode_pool()
+
+            while self.preloads and self.keep_preloading:
+
+                if pool is None:
+                    self._preload_thread_pass_serial()  # Serial decoding
+                else:
+                    self._preload_thread_pass_parallel(pool)  # Parallel decoding
+
+                if renpy.emscripten:
+                    yield from renpy.display.predict.predict_sleep()
+
+            self.cleanout()
+            if renpy.emscripten:
+                yield from renpy.display.predict.predict_sleep()
+        finally:
+            with self.preload_lock:
+                self.preload_completed = generation
+            wake_texture_upload()
 
     def _preload_thread_pass_serial(self):
         """
