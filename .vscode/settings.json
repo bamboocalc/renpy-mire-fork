@@ -1,4 +1,7 @@
 {
+    "git.autorefresh": true,
+    "git.untrackedChanges": "mixed",
+    "git.decorations.enabled": true,
     "files.watcherExclude": {
         "**/renpy/0old/**": true,
         "**/renpy/atom/**": true,
