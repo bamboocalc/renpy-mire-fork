@@ -210,6 +210,12 @@ class Cache:
             self.cache_limit = int(renpy.config.image_cache_size_mb * 1024 * 1024 // 4)
 
     def quit(self):
+        """
+        Stops the preload thread and empties the cache. This is safe to call when
+        no renderer was ever created, as happens when Ren'Py exits before the
+        display is initialized.
+        """
+
         if not self.preload_thread:
             return
 
@@ -503,8 +509,9 @@ class Cache:
 
     # This kills off a given cache entry.
     def kill(self, ce: CacheEntry):
-        # Let the texture cache know we're not needed.
-        if ce.surf is not None:
+        # Let the texture cache know we're not needed. Without a renderer, there
+        # is no texture cache to tell.
+        if ce.surf is not None and renpy.display.draw is not None:
             renpy.display.draw.mutated_surface(ce.surf)
 
         with self.lock:
@@ -634,9 +641,10 @@ class Cache:
 
         num_threads = renpy.config.preload_threads
 
-        # 0 means auto (use CPU count, always leaving at least 2 free, and at least 1 thread)
+        # 0 means auto (use the CPU count minus 2, capped by config.preload_thread_autocap, and at least 1 thread).
+        # An unknown CPU count is treated as 1.
         if num_threads == 0:
-            num_threads = min((os.cpu_count() - 2), renpy.config.preload_thread_autocap)
+            num_threads = min(((os.cpu_count() or 1) - 2), renpy.config.preload_thread_autocap)
             num_threads = max(1, num_threads)
 
         # 1 means disabled
@@ -649,7 +657,7 @@ class Cache:
         return self.decode_pool
 
     def preload_thread_main(self):
-        while self.keep_preloading:
+        while True:
             with self.preload_lock:
                 self.preload_lock.wait_for(
                     lambda: not self.keep_preloading or self.preload_generation != self.preload_completed)

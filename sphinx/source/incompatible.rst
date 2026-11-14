@@ -17,6 +17,13 @@ Upcoming Deprecations
 
 The ability to create zsync updates will be removed when Ren'Py 8.7 is released.
 
+The ``future``, ``six``, and ``renpy.six`` modules are deprecated, and should
+not be used in new games. Portions of these modules may be removed in future
+versions of Ren'Py.
+
+The undocumented ``renpy.tfd`` module is planned to be removed in mid-2027.
+
+
 .. _incompatible-8.6.0:
 
 8.6.0
@@ -53,11 +60,11 @@ pass `glsl` and uses GLSL ES 3.00 features raises an exception.
 argument, which should be set to 3 to get the SDL3 library. Calls without the version argument will return None,
 representing SDL2 not being present.
 
-**Input Method Candidates** Ren'Py now draws the input method (IME) candidate list
-when SDL supplies candidate events, including on Windows, rather than using the
-operating system's candidate window. Linux IBus and Fcitx still use their native
-candidate windows. Games that customized text input may want to restyle the new
-``_ime_candidates`` screen, as described in :ref:`input-methods`.
+**Input Method Candidates** On Windows, Ren'Py now draws the input method (IME)
+candidate list, rather than using the operating system's candidate window. SDL
+currently supplies candidate events only on Windows, so other platforms still
+use their native candidate windows. Games that customized text input may want to
+restyle the new ``_ime_candidates`` screen, as described in :ref:`input-methods`.
 
 **Late Audio Scan** Ren'Py now defines automatic audio files at a late init level, rather than at init 0.
 To revert to the prior behavior, add to your game::
@@ -88,13 +95,9 @@ old behavior. To revert to it, add to your game::
 
     define config.live2d_pose = False
 
-.. _incompatible-8.5.4:
-
-8.5.4
------
-
-Ren'Py now uses the Cardano interpretation of Bezier curves in Live2D, which is consistent with the Live2D SDK.
-This may cause some motions to change their behavior. To revert to the old behavior, add to your game::
+**Live2D Bezier Curves** Ren'Py now uses the Cardano interpretation of Bezier curves in Live2D, which is consistent
+with the Live2D SDK. This may cause some motions to change their behavior. Games declaring compatibility with Ren'Py
+8.5 or earlier retain the old behavior. To revert to it, add to your game::
 
     define config.live2d_old_beziers = True
 

@@ -28,7 +28,6 @@ from renpy.compat import PY2, basestring, bchr, bord, chr, open, pystr, range, r
 
 
 import renpy
-import operator
 
 warp_spec = None
 warping = False
@@ -296,17 +295,19 @@ def warp():
     # Now, attempt to find a statement preceding the line that the
     # user wants to warp to.
 
-    candidates = [(n.linenumber, n) for n in seenset if n.filename == filename and n.linenumber <= line]
+    # This iterates the namemap rather than seenset, as the namemap is in source order, with each statement before
+    # the statements it contains.
+    candidates = [n for n in renpy.game.script.namemap.values() if n.filename == filename and n.linenumber <= line]
 
     # We didn't find any candidate statements, so give up the warp.
     if not candidates:
         raise Exception("Could not find a statement to warp to. ({})".format(spec))
 
-    # Sort the list of candidates, so they're ordered by linenumber.
-    candidates.sort(key=operator.itemgetter(0))
-
-    # Pick the candidate immediately before (or on) the line.
-    node = candidates[-1][1]
+    # Pick the first statement on the closest line at or before the requested line. Several statements can share a
+    # line: a Translate, the statements it wraps, and an EndTranslate that has the location of the first wrapped
+    # statement but follows the last, which may be on a later line. The first is the one that starts the line.
+    linenumber = max(n.linenumber for n in candidates)
+    node = next(n for n in candidates if n.linenumber == linenumber)
 
     # Now, determine a list of nodes to run while getting to this node.
     run = []

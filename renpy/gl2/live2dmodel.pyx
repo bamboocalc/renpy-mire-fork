@@ -22,6 +22,7 @@
 from libc.stdint cimport intptr_t
 from libc.stdlib cimport malloc, free
 from libc.string cimport memcpy
+from libc.math cimport floor, ceil
 from libc.stdio cimport printf
 
 from renpy.gl2.gl2mesh import TEXTURE_LAYOUT
@@ -647,6 +648,9 @@ cdef class ModelRenderer:
     cdef dict mask_renders
     cdef dict multi_masks
 
+    # True if masks should be cropped to the bounds of their geometry.
+    cdef bint mask_clipping
+
     def __init__(self, Live2DModel model, textures, w, h, double offset_x, double offset_y, double ppu, Matrix reverse, Matrix forward):
         self.model = model
         self.analysis = model.analysis
@@ -661,6 +665,8 @@ cdef class ModelRenderer:
 
         self.mask_renders = { }
         self.multi_masks = { }
+
+        self.mask_clipping = renpy.config.live2d_mask_clipping
 
     def render(self):
         """
@@ -769,24 +775,60 @@ cdef class ModelRenderer:
         Masks `r` with the union of the `count` drawables in `masks`.
         """
 
-        cdef int j
+        cdef int i, j
         cdef Render m
+        cdef double left, top, right, bottom, x, y
 
-        if count == 1:
-            m = self.mask_render(masks[0])
+        key = tuple([ masks[j] for j in range(count) ])
+        cropped = self.multi_masks.get(key, None)
 
-        else:
-            key = tuple([ masks[j] for j in range(count) ])
-
-            m = self.multi_masks.get(key, None)
-
-            if m is None:
+        if cropped is None and not self.mask_clipping:
+            if count == 1:
+                m = self.mask_render(masks[0])
+            else:
                 m = Render(self.w, self.h)
 
-                for j in key:
-                    m.blit(self.mask_render(j), (0, 0))
+                for i in key:
+                    m.blit(self.mask_render(i), (0, 0))
 
-                self.multi_masks[key] = m
+            # A zero width tells the shaders that the mask covers the canvas.
+            cropped = (m, (0.0, 0.0, 0.0, 0.0))
+
+            self.multi_masks[key] = cropped
+
+        if cropped is None:
+            m = Render(self.w, self.h)
+            left, top, right, bottom = self.w, self.h, 0, 0
+
+            for i in key:
+                m.blit(self.mask_render(i), (0, 0))
+                for j in range(self.model.drawable_vertex_counts[i]):
+                    x = self.offset_x + self.model.drawable_vertex_positions[i][j].X * self.ppu
+                    y = self.offset_y - self.model.drawable_vertex_positions[i][j].Y * self.ppu
+                    left = min(left, x)
+                    top = min(top, y)
+                    right = max(right, x)
+                    bottom = max(bottom, y)
+
+            # Keep transparent texels around the geometry for filtering,
+            # and retain the clipping of the original model canvas.
+            left = max(0, floor(left) - 2)
+            top = max(0, floor(top) - 2)
+            right = min(self.w, ceil(right) + 2)
+            bottom = min(self.h, ceil(bottom) + 2)
+
+            if right > left and bottom > top:
+                m = m.subsurface((left, top, right - left, bottom - top), subpixel=True)
+                bounds = (left / self.w, top / self.h, (right - left) / self.w, (bottom - top) / self.h)
+            else:
+                m = Render(1, 1)
+                bounds = (0.0, 0.0, 1.0 / self.w, 1.0 / self.h)
+
+            cropped = (m, bounds)
+
+            self.multi_masks[key] = cropped
+
+        m, bounds = cropped
 
         r.add_shader("-renpy.texture")
 
@@ -796,6 +838,7 @@ cdef class ModelRenderer:
             r.add_shader("live2d.mask")
 
         self.add_position_uniforms(r)
+        r.add_uniform("u_live2d_mask_bounds", bounds)
 
         # Correct the mesh oversample estimate for model coordinates.
         r.add_property("mesh_oversample_scale", 1.0 / self.ppu)

@@ -342,11 +342,27 @@ def set_utf8_locale() -> None:
             locale.setlocale(locale.LC_CTYPE, original)
 
 
+def set_android_umask():
+    """
+    On Android, gives what the process creates group access. Android starts
+    apps with an owner-only umask, but external storage relies on group access:
+    a directory there inherits the setgid bit and the ext_data_rw group, which
+    only helps adb and storage tools if the group can use it. That can't be
+    added with chmod afterwards, as the app isn't in the group, and so the
+    kernel would clear the setgid bit.
+    """
+
+    if renpy.android:
+        os.umask(0o007)
+
+
 def bootstrap(renpy_base: str):
     global renpy
 
     import renpy.config
     import renpy.log
+
+    set_android_umask()
 
     # In case of invocation with system python, check that it's run with -X utf8
     if not sys.flags.utf8_mode:
@@ -567,8 +583,11 @@ def bootstrap(renpy_base: str):
 
         renpy.display.tts.tts(None)  # type: ignore
 
+        # The preload thread is started when renpy.display.im is imported, so stop it even if
+        # the display was never initialized.
+        renpy.display.im.cache.quit()  # type: ignore
+
         if renpy.display.draw:  # type: ignore
-            renpy.display.im.cache.quit()  # type: ignore
             renpy.display.draw.quit()  # type: ignore
 
         renpy.audio.audio.quit()
