@@ -62,7 +62,6 @@
         "renpy/gl2/gl2statecache.pyi": true,
         "renpy/gl2/gl2texture.pyi": true,
         "renpy/gl2/gl2uniform.pyi": true,
-        "renpy/gl2/live2dmodel.pyi": true,
         "renpy/pydict.pyi": true,
         "renpy/pygame/color.pyi": true,
         "renpy/pygame/controller.pyi": true,

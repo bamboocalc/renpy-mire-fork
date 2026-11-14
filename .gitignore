@@ -168,7 +168,6 @@ renpy/gl2/gl2shader.pyi
 renpy/gl2/gl2statecache.pyi
 renpy/gl2/gl2texture.pyi
 renpy/gl2/gl2uniform.pyi
-renpy/gl2/live2dmodel.pyi
 renpy/pydict.pyi
 renpy/pygame/color.pyi
 renpy/pygame/controller.pyi
