@@ -415,7 +415,9 @@ init python:
             }
             if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))) || depth > 1.0 || depth < 0.0) return vec3(1.0);
             vec2 grid = u_gltf_shadow_atlas.xy;
-            vec2 tile_origin = vec2(mod(tile, grid.x), floor(tile / grid.x));
+            // Half-tile offset keeps exact multiples of the column count off the rounding edge of GPU division.
+            float row = floor((tile + 0.5) / grid.x);
+            vec2 tile_origin = vec2(tile - row * grid.x, row);
             float size = u_gltf_shadow_atlas.z;
             float determinant = dx.x * dy.y - dx.y * dy.x;
             vec2 gradient = vec2(0.0);
