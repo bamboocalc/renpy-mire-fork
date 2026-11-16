@@ -208,6 +208,8 @@ class Container(renpy.display.displayable.Displayable):
 
         if child._duplicatable:
             self._duplicatable = True
+        if child._save_target:
+            self._save_target = True
 
         renpy.display.render.invalidate(self)
 
@@ -215,6 +217,7 @@ class Container(renpy.display.displayable.Displayable):
         self.child = None
         self.children = self._list_type()
         self.offsets = self._list_type()
+        self._save_target = False
 
         renpy.display.render.redraw(self, 0)
 
@@ -231,6 +234,7 @@ class Container(renpy.display.displayable.Displayable):
             return
 
         self.children.pop(i)  # W0631
+        self._save_target = any(child._save_target for child in self.children)
         self.offsets = self._list_type()
 
         if self.children:

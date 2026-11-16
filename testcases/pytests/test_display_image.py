@@ -19,9 +19,46 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-"""Tests for renpy/display/image.py: the alt text of ImageReference."""
+"""Tests for named image references, accessibility text, and saved target state."""
+
+import pickle
+
+import pytest
 
 import renpy.display.image as image_module
+from renpy.display.displayable import Displayable
+from renpy.display.render import Render
+
+
+class SizedImage(Displayable):
+    """A small stand-in for a playing image whose current state changes its visible size."""
+
+    _duplicatable = True
+
+    def __init__(self, width, retain):
+        super().__init__()
+        self.width = width
+        self._save_target = retain
+
+    def _duplicate(self, args):
+        return self._copy(args)
+
+    def render(self, width, height, st, at):
+        return Render(self.width, 1)
+
+
+@pytest.mark.parametrize("retain", [False, True])
+def test_named_image_restores_opted_in_target_state(mocker, retain):
+    """Animated images retain their saved instance; ordinary images keep rebuilding their target from its definition."""
+    mocker.patch.dict(image_module.images, {("saved_target_probe",): SizedImage(20, retain)})
+    reference = image_module.ImageReference(("saved_target_probe",))
+    reference.find_target()
+    reference.visit()[0].width = 10
+    restored = pickle.loads(pickle.dumps(reference))
+    restored.find_target()
+    assert restored.visit()[0].render(100, 100, 0, 0).get_size() == (10 if retain else 20, 1)
+    fresh = reference._duplicate(None)
+    assert fresh.visit()[0].render(100, 100, 0, 0).get_size() == (20, 1)
 
 
 def test_image_reference_explicit_alt(mocker):

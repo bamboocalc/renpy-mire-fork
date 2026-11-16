@@ -187,6 +187,9 @@ class Displayable(renpy.object.Object):
     non-trivial duplicate method), or one of its children is.
     """
 
+    _save_target: bool = False
+    "Whether named image references must save this instance's playback state."
+
     _clipping: bool = False
     "True if this displayable requires clipping."
 

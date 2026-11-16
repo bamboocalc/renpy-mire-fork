@@ -397,6 +397,9 @@ class ImageReference(renpy.display.displayable.Displayable):
         return self.target._target()
 
     def find_target(self):
+        if self.param_target is not None and self.param_target._save_target:
+            self.target = self.param_target
+            return True
         name = self.name
 
         if isinstance(name, renpy.display.displayable.Displayable):
@@ -442,6 +445,8 @@ class ImageReference(renpy.display.displayable.Displayable):
         try:
             a = self._args.copy(name=name, args=args)
             self.target = target._duplicate(a)
+            if self.target._save_target:
+                self.param_target = self.target
 
         except Exception as e:
             if renpy.config.raise_image_exceptions:
@@ -472,6 +477,8 @@ class ImageReference(renpy.display.displayable.Displayable):
 
         rv = self._copy(args)
         rv.target = None
+        if rv.param_target is not None and rv.param_target._save_target:
+            rv.param_target = None
 
         if isinstance(rv.name, renpy.display.displayable.Displayable):
             if rv.name._duplicatable:
