@@ -20,9 +20,11 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
+import base64
 import collections
 import json
 import math
+import pickle
 import struct
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -210,13 +212,15 @@ def test_shared_import_renders_with_each_models_shaders(model_cache, mocker):
     """A shared import draws with the shaders of the model being rendered, not the one that imported it."""
     mocker.patch.object(assimp, "new_predicted", set())
     mocker.patch.object(renpy.display.im, "render_for_texture", return_value=Render(1, 1))
-    mesh_info = SimpleNamespace(mesh=None, uniforms={}, texture_uniforms={}, twosided=False)
+    mesh_info = assimp.MeshInfo.__new__(assimp.MeshInfo)
+    mesh_info.mesh, mesh_info.uniforms, mesh_info.texture_uniforms = None, {}, {}
+    mesh_info.material_index, mesh_info.twosided = 0, False
     first = assimp.GLTFModel("room.glb", shader="example.first")
     second = assimp.GLTFModel("room.glb", shader="example.second")
-    model_cache[first.cache_key] = SimpleNamespace(
-        blit_info=[SimpleNamespace(mesh_info=mesh_info, reverse=IDENTITY, forward=IDENTITY)],
-        mesh_info=[mesh_info],
-    )
+    data = assimp.ModelData()
+    data.blit_info = [SimpleNamespace(mesh_info=mesh_info, reverse=IDENTITY, forward=IDENTITY)]
+    data.mesh_info = [mesh_info]
+    model_cache[first.cache_key] = data
     for model, shader in ((first, "example.first"), (second, "example.second")):
         mesh_render = model.render(0, 0, 0, 0).children[0][0]
         assert mesh_render.shaders == (shader,)
@@ -234,7 +238,10 @@ def _native_attribute_rows(mesh):
 
 
 @pytest.mark.parametrize("authored_tangents", [False, True], ids=["generated", "authored"])
-def test_native_import_keeps_geometry_with_and_without_tangents(model_cache, mocker, tmp_path, authored_tangents):
+@pytest.mark.parametrize("standard", [False, True], ids=["legacy", "standard-material"])
+def test_native_import_keeps_geometry_with_and_without_tangents(
+    model_cache, mocker, tmp_path, authored_tangents, standard
+):
     """Preserve mirrored UV seams and authored tangents, generating missing tangents only when requested.
 
     Axis-aligned vectors and UVs remain distinguishable in the three-decimal diagnostic repr.
@@ -287,8 +294,9 @@ def test_native_import_keeps_geometry_with_and_without_tangents(model_cache, moc
         return Path(filename).open("rb")
 
     mocker.patch.object(renpy.loader, "load", side_effect=open_model)
-    plain = assimp.GLTFModel(model_path.as_posix(), shader="renpy.texture").load()
-    tangent = assimp.GLTFModel(model_path.as_posix(), shader="renpy.texture", tangents=True).load()
+    mocker.patch.object(renpy.display.im.cache, "preload_image")
+    plain = assimp.GLTFModel(model_path.as_posix(), shader="renpy.texture", material=standard).load()
+    tangent = assimp.GLTFModel(model_path.as_posix(), shader="renpy.texture", tangents=True, material=standard).load()
     assert tangent.memory_size > plain.memory_size > 0
     assert len(plain.mesh_info) == len(tangent.mesh_info) == 1
     first, second = plain.mesh_info[0].mesh, tangent.mesh_info[0].mesh
@@ -333,7 +341,8 @@ def test_native_import_keeps_geometry_with_and_without_tangents(model_cache, moc
 def test_cached_model_does_not_wait_for_an_unrelated_import(model_cache, operation):
     """Rendering or visiting a resident room must not wait behind an unrelated import."""
     model = assimp.GLTFModel("resident.glb", shader="renpy.texture")
-    data = SimpleNamespace(memory_size=1, mesh_info=[])
+    data = assimp.ModelData()
+    data.memory_size, data.mesh_info = 1, []
     model_cache[model.cache_key] = data
     with ThreadPoolExecutor(max_workers=1) as pool, assimp.loader_lock:
         result = pool.submit(getattr(model, operation)).result(timeout=1)
@@ -341,3 +350,757 @@ def test_cached_model_does_not_wait_for_an_unrelated_import(model_cache, operati
             assert result is data
         else:
             assert result == []
+
+
+# Material alpha and saved-model compatibility.
+
+@pytest.fixture
+def material_model(model_cache, mocker):
+    """Load shipped glTF fixtures through the real importer without starting image prediction threads."""
+    mocker.patch.object(renpy.loader, "loadable", side_effect=lambda filename: Path(filename).is_file())
+
+    def open_model(filename):
+        """Assimp owns and closes the returned file through its SDL stream."""
+        return Path(filename).open("rb")
+
+    mocker.patch.object(renpy.loader, "load", side_effect=open_model)
+    mocker.patch.object(renpy.display.im.cache, "preload_image")
+
+    def load(mode, **kwargs):
+        filename = Path(__file__).parents[1] / "game" / "models" / f"alpha-{mode}.gltf"
+        return assimp.GLTFModel(filename.as_posix(), shader="renpy.texture", **kwargs)
+
+    return load
+
+
+@pytest.mark.parametrize(("mode", "expected"), [("opaque", 0.0), ("mask", 1.0), ("blend", 2.0)])
+def test_import_exposes_material_alpha_modes(material_model, mode, expected):
+    """Shaders receive the native material mode, cutoff, base alpha, and double-sided setting."""
+    data = material_model(mode, material_alpha=True).load()
+    assert len(data.mesh_info) == 1
+    material = data.mesh_info[0]
+    assert material.uniforms["u_material_gltf_alphamode"] == expected
+    assert material.uniforms["u_material_gltf_alphacutoff"] == pytest.approx(0.3)
+    assert material.uniforms["u_color_diffuse"][3] == (0.0 if mode == "opaque" else 0.5)
+    assert material.twosided
+
+
+def test_material_alpha_does_not_share_incompatible_textures(material_model):
+    """Straight-alpha and legacy premultiplied imports coexist, while equal options still share an import."""
+    legacy = material_model("blend")
+    straight = material_model("blend", material_alpha=True)
+    assert legacy.load() is not straight.load()
+    assert straight.load() is material_model("blend", material_alpha=True).load()
+
+
+def test_import_defaults_missing_alpha_settings(material_model, tmp_path):
+    """Materials without alpha settings use glTF's opaque mode and 0.5 cutoff defaults."""
+    document = json.loads(Path(material_model("opaque").filename).read_text(encoding="utf-8"))
+    material = document["materials"][0]
+    del material["alphaMode"]
+    del material["alphaCutoff"]
+    filename = tmp_path / "default-alpha.gltf"
+    filename.write_text(json.dumps(document), encoding="utf-8")
+    data = assimp.GLTFModel(filename.as_posix(), shader="renpy.texture", material_alpha=True).load()
+    assert data.mesh_info[0].uniforms["u_material_gltf_alphamode"] == 0.0
+    assert data.mesh_info[0].uniforms["u_material_gltf_alphacutoff"] == 0.5
+
+
+def test_old_saved_model_preserves_legacy_materials():
+    """An old save has no material_alpha attribute and must retain its original texture and drawing behavior."""
+    model = assimp.GLTFModel("old.glb", shader="renpy.texture")
+    del model.material_alpha
+    del model.material
+    restored = pickle.loads(pickle.dumps(model))
+    assert restored.material_alpha is False
+    assert restored.material is False
+    assert restored.cache_key == model.cache_key
+
+
+# Standard material metadata and validation.
+
+@pytest.fixture
+def standard_model(material_model, tmp_path):
+    """Reuse the real filesystem/import harness with a self-contained material conformance scene."""
+    path = Path(__file__).parents[1] / "game" / "models" / "material-grid.gltf"
+
+    def create(edit=None, glb=False, **kwargs):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if edit is not None:
+            edit(document)
+        filename = tmp_path / ("material.glb" if glb else "material.gltf")
+        data = json.dumps(document).encode("utf-8")
+        if glb:
+            binary = base64.b64decode(document["buffers"][0].pop("uri").partition(",")[2])
+            binary += b"\0" * (-len(binary) % 4)
+            data = json.dumps(document).encode("utf-8")
+            data += b" " * (-len(data) % 4)
+            data = (struct.pack("<4sII", b"glTF", 2, len(data) + len(binary) + 28)
+                + struct.pack("<I4s", len(data), b"JSON") + data
+                + struct.pack("<I4s", len(binary), b"BIN\0") + binary)
+        filename.write_bytes(data)
+        return assimp.GLTFModel(filename.as_posix(), material=True, **kwargs)
+
+    return create
+
+
+@pytest.mark.parametrize("glb", [False, True], ids=["gltf", "glb"])
+def test_standard_materials_keep_authored_indices_and_defaults(standard_model, glb):
+    """Repeated materials keep their own metadata; default factors are always available to custom shaders."""
+    data = standard_model(glb=glb).load()
+    assert len(data.mesh_info) == 12
+    uniforms = data.mesh_info[0].uniforms
+    assert uniforms["u_color_base"] == (1, 1, 1, 1)
+    assert uniforms["u_material_metallicfactor"] == 1.0
+    assert uniforms["u_material_roughnessfactor"] == 1.0
+    assert uniforms["u_material_emissivefactor"] == (0, 0, 0)
+    assert uniforms["u_material_normal_scale"] == 1.0
+    assert uniforms["u_material_occlusion_strength"] == 1.0
+    assert data.mesh_info[1].uniforms["u_material_base_color_texcoord"] == 1.0
+    assert data.mesh_info[3].uniforms["u_material_base_color_texcoord"] == 1.0
+    assert data.mesh_info[7].uniforms["u_material_base_color_uv0"] == pytest.approx((0, -1, 0.9))
+    assert data.mesh_info[7].uniforms["u_material_base_color_uv1"] == pytest.approx((2, 0, 0.3))
+
+
+def test_standard_material_defaults_without_authored_materials(standard_model):
+    """Assimp's appended default material follows glTF's white, opaque defaults even without a material table."""
+    def edit(document):
+        del document["materials"]
+        for mesh in document["meshes"]:
+            del mesh["primitives"][0]["material"]
+
+    data = standard_model(edit).load()
+    assert data.mesh_info
+    assert all(mi.uniforms["u_color_base"] == (1, 1, 1, 1) for mi in data.mesh_info)
+
+
+def test_layered_material_factors_and_independent_texture_bindings(standard_model):
+    """Extension factors retain their ranges and channels, and specular-color maps decode sRGB independently of weights."""
+    def edit(document):
+        document["materials"][0]["extensions"] = {
+            "KHR_materials_specular": {"specularFactor": 0.25, "specularColorFactor": [2, 0.5, 1],
+                "specularTexture": {"index": 0}, "specularColorTexture": {"index": 0, "texCoord": 1}},
+            "KHR_materials_clearcoat": {"clearcoatFactor": 0.8, "clearcoatRoughnessFactor": 0.3,
+                "clearcoatNormalTexture": {"index": 0, "scale": 0.4}},
+            "KHR_materials_sheen": {"sheenColorFactor": [0.1, 0.2, 0.4], "sheenRoughnessFactor": 0.6},
+        }
+
+    data = standard_model(edit).load()
+    material = data.mesh_info[0]
+    assert material.uniforms["u_material_specular_factor"] == 0.25
+    assert material.uniforms["u_material_specular_color_factor"] == (2, 0.5, 1)
+    assert material.uniforms["u_material_clearcoat_factor"] == 0.8
+    assert material.uniforms["u_material_clearcoat_normal_scale"] == 0.4
+    assert material.uniforms["u_material_sheen_color_factor"] == (0.1, 0.2, 0.4)
+    assert material.uniforms["u_material_specular_color_texcoord"] == 1
+    assert not material.texture_uniforms["u_tex_specular"].srgb
+    assert material.texture_uniforms["u_tex_specular_color"].srgb
+
+
+@pytest.mark.parametrize("extension,field,value", [
+    ("KHR_materials_specular", "specularFactor", -0.1),
+    ("KHR_materials_specular", "specularFactor", None),
+    ("KHR_materials_specular", "specularColorFactor", None),
+    ("KHR_materials_specular", "specularColorFactor", [-1, 0, 0]),
+    ("KHR_materials_clearcoat", "clearcoatFactor", 2),
+    ("KHR_materials_sheen", "sheenRoughnessFactor", -1),
+    ("KHR_materials_sheen", "sheenColorFactor", [1, 2, 1]),
+])
+def test_layered_material_rejects_invalid_factors(standard_model, extension, field, value):
+    """Invalid source factors fail during import rather than reaching shader math or sampler setup."""
+    def edit(document):
+        document["materials"][0]["extensions"] = {extension: {field: value}}
+
+    with pytest.raises(ValueError):
+        standard_model(edit).load()
+
+
+def test_standard_texture_prediction_keeps_only_bound_overrides(standard_model):
+    """Prediction must request sampler-aware bindings once, without the replaced parent's raw-color copy."""
+    replacement = renpy.display.im.Null("#135")
+    model = standard_model(u_tex_base_color=replacement)
+    parent = model.texture_uniforms["u_tex_base_color"]
+    model.load()
+    textures = model.visit()
+    assert len(textures) == len(set(textures))
+    overridden = [texture for texture in textures if texture.image == parent]
+    assert overridden and all(texture.srgb for texture in overridden)
+    model.texture_uniforms["u_tex_base_color"] = renpy.display.im.Null("#abc")
+    changed = model.visit()
+    assert not any(texture.image == parent for texture in changed)
+    assert any(texture.image == model.texture_uniforms["u_tex_base_color"] for texture in changed)
+
+
+@pytest.mark.parametrize("attribute", ["POSITION", "TEXCOORD_0"])
+def test_standard_material_rejects_nonfinite_geometry(standard_model, attribute):
+    """Keeping valid constant attributes must not admit NaN geometry that the old cleanup pass removed."""
+    def edit(document):
+        index = document["meshes"][0]["primitives"][0]["attributes"][attribute]
+        view = document["bufferViews"][document["accessors"][index]["bufferView"]]
+        binary = bytearray(base64.b64decode(document["buffers"][0]["uri"].partition(",")[2]))
+        struct.pack_into("<f", binary, view["byteOffset"], float("nan"))
+        document["buffers"][0]["uri"] = "data:application/octet-stream;base64," + base64.b64encode(binary).decode()
+
+    with pytest.raises(ValueError, match="finite"):
+        standard_model(edit).load()
+
+
+@pytest.mark.parametrize(("field", "value"), [("wrapS", 0), ("magFilter", 9987), ("minFilter", 0)])
+def test_standard_material_rejects_invalid_samplers(standard_model, field, value):
+    """Invalid sampler constants fail during loading rather than producing incomplete GPU textures."""
+    def edit(document):
+        document["samplers"][0][field] = value
+
+    with pytest.raises(ValueError, match="wrap|filters"):
+        standard_model(edit).load()
+
+
+@pytest.mark.parametrize("coord", [2, 3])
+def test_standard_material_rejects_unsupported_uv_sets(standard_model, coord):
+    """The supported UV range is explicit; silently selecting the wrong coordinates would corrupt the material."""
+    def edit(document):
+        document["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["texCoord"] = coord
+
+    with pytest.raises(ValueError, match="UV set"):
+        standard_model(edit).load()
+
+
+def test_standard_material_rejects_missing_uvs(standard_model):
+    """A referenced texture coordinate set must actually exist on every mesh using that material."""
+    def edit(document):
+        document["meshes"][1]["primitives"][0]["attributes"].pop("TEXCOORD_1")
+
+    with pytest.raises(ValueError, match="missing UV set 1"):
+        standard_model(edit).load()
+
+
+@pytest.mark.parametrize("data", [b"glTF", struct.pack("<4sII", b"glTF", 2, 40) + struct.pack("<I4s", 20, b"JSON")])
+def test_material_document_rejects_truncated_glb(mocker, data):
+    """GLB metadata lengths are checked before JSON parsing, without reading the geometry chunk."""
+    import io
+
+    mocker.patch.object(renpy.loader, "load", side_effect=lambda filename: io.BytesIO(data))
+    with pytest.raises(ValueError, match="Truncated"):
+        assimp._material_document("truncated.glb")
+
+
+# PBR scene setup and saved scene graphs.
+
+def test_pbr_uses_standard_materials_and_tangents(standard_model):
+    """Selecting PBR supplies the standard texture contract and generated tangent basis without extra import flags."""
+    model = standard_model(shader="renpy.gltf.pbr")
+    assert model.material and model.material_alpha and model.tangents
+    data = model.load()
+    assert all("a_tangent" in mi.mesh.layout.offset for mi in data.mesh_info)
+
+
+def test_standard_material_preserves_unlit_and_two_sided(standard_model):
+    """The canonical source material controls the lighting bypass and back-face normal convention."""
+    def edit(document):
+        document["materials"][0].setdefault("extensions", {})["KHR_materials_unlit"] = {}
+        document["materials"][0]["doubleSided"] = True
+        document["materials"][1]["doubleSided"] = False
+
+    data = standard_model(edit).load()
+    assert data.mesh_info[0].uniforms["u_material_unlit"] == 1.0
+    assert data.mesh_info[0].uniforms["u_material_twosided"] == 1.0
+    assert data.mesh_info[1].uniforms["u_material_unlit"] == 0.0
+    assert data.mesh_info[1].uniforms["u_material_twosided"] == 0.0
+
+
+@pytest.mark.parametrize("strength", [0, 1, 8])
+def test_standard_material_imports_emissive_strength(standard_model, strength):
+    """An authored emissive strength stays separate from the color factor, allowing independent overrides."""
+    def edit(document):
+        document["materials"][0]["emissiveFactor"] = [0.5, 0.25, 1]
+        document["materials"][0].setdefault("extensions", {})["KHR_materials_emissive_strength"] = {
+            "emissiveStrength": strength,
+        }
+
+    data = standard_model(edit).load()
+    assert data.mesh_info[0].uniforms["u_material_emissivefactor"] == (0.5, 0.25, 1)
+    assert data.mesh_info[0].uniforms["u_material_emissive_strength"] == strength
+    assert data.mesh_info[1].uniforms["u_material_emissive_strength"] == 1
+
+
+@pytest.mark.parametrize("strength", [-1, math.inf, math.nan, "8", None])
+def test_standard_material_rejects_invalid_emissive_strength(standard_model, strength):
+    """Negative, non-finite, and non-numeric multipliers cannot reach the lighting shader."""
+    def edit(document):
+        document["materials"][0].setdefault("extensions", {})["KHR_materials_emissive_strength"] = {
+            "emissiveStrength": strength,
+        }
+
+    with pytest.raises(Exception, match="emissiveStrength|loading"):
+        standard_model(edit).load()
+
+
+def test_standard_material_rejects_emissive_strength_on_unlit(standard_model):
+    """The glTF extension forbids combining an emissive multiplier with the unlit extension."""
+    def edit(document):
+        document["materials"][0]["extensions"] = {
+            "KHR_materials_emissive_strength": {}, "KHR_materials_unlit": {},
+        }
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        standard_model(edit).load()
+
+
+@pytest.mark.parametrize("ior", [0, 1, 1.5, 2.4])
+def test_standard_material_imports_optical_properties(standard_model, ior):
+    """Optical factors are canonical source values, including the extension's special zero-IOR mode."""
+    def edit(document):
+        document["materials"][0]["extensions"] = {
+            "KHR_materials_transmission": {"transmissionFactor": 0.75},
+            "KHR_materials_volume": {"thicknessFactor": 0.2, "attenuationDistance": 3,
+                "attenuationColor": [0.25, 0.5, 1]},
+            "KHR_materials_ior": {"ior": ior},
+        }
+
+    data = standard_model(edit).load()
+    values = data.mesh_info[0].uniforms
+    assert values["u_material_transmission_factor"] == 0.75
+    assert values["u_material_thickness_factor"] == 0.2
+    assert values["u_material_attenuation_distance"] == 3
+    assert values["u_material_attenuation_color"] == (0.25, 0.5, 1)
+    assert values["u_material_ior"] == ior
+    defaults = data.mesh_info[1].uniforms
+    assert defaults["u_material_transmission_factor"] == defaults["u_material_thickness_factor"] == 0
+    assert defaults["u_material_attenuation_distance"] == 0  # Infinite attenuation distance.
+    assert defaults["u_material_attenuation_color"] == (1, 1, 1)
+    assert defaults["u_material_ior"] == 1.5
+
+
+@pytest.mark.parametrize(("extension", "field", "value"), [
+    ("transmission", "transmissionFactor", -1), ("transmission", "transmissionFactor", 1.1),
+    ("transmission", "transmissionFactor", math.nan), ("volume", "thicknessFactor", -1),
+    ("volume", "attenuationDistance", 0), ("volume", "attenuationDistance", math.inf),
+    ("volume", "attenuationColor", [1, 0, -1]), ("volume", "attenuationColor", [1, 2, 1]),
+    ("ior", "ior", -1), ("ior", "ior", 0.5), ("ior", "ior", "1.5"),
+])
+def test_standard_material_rejects_invalid_optical_properties(standard_model, extension, field, value):
+    """Invalid source optics fail at import rather than producing NaNs or undefined texture samples on the GPU."""
+    def edit(document):
+        document["materials"][0]["extensions"] = {"KHR_materials_" + extension: {field: value}}
+
+    with pytest.raises(Exception, match=field + "|loading"):
+        standard_model(edit).load()
+
+
+@pytest.mark.parametrize("extension", ["transmission", "volume", "ior"])
+def test_standard_material_rejects_optical_properties_on_unlit(standard_model, extension):
+    """The glTF optical extensions explicitly exclude unlit materials."""
+    def edit(document):
+        document["materials"][0]["extensions"] = {"KHR_materials_" + extension: {}, "KHR_materials_unlit": {}}
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        standard_model(edit).load()
+
+
+def test_import_accepts_light_only_assets(standard_model):
+    """A light rig needs no dummy geometry to get through Assimp's mesh-only import boundary."""
+    def edit(document):
+        document.pop("meshes")
+        document["extensions"] = {"KHR_lights_punctual": {"lights": [{"type": "point", "intensity": 4}]}}
+        document["nodes"] = [{"extensions": {"KHR_lights_punctual": {"light": 0}}}]
+        document["scenes"] = [{"nodes": [0]}]
+        document["scene"] = 0
+
+    data = standard_model(edit).load()
+    assert data.mesh_info == []
+    assert len(data.lights) == 1 and data.lights[0][0].intensity == 4
+
+
+def test_light_overrides_require_standard_import():
+    """Legacy imports have no light graph, so overrides must not silently do nothing."""
+    with pytest.raises(ValueError, match="standard material"):
+        assimp.GLTFModel("room.glb", shader="renpy.texture", light_overrides={"Lamp": {"intensity": 0}})
+
+
+def test_unknown_light_override_fails_even_without_imported_lights(standard_model, mocker):
+    """A misspelled light name is an error even when the model contains no light nodes."""
+    model = standard_model(light_overrides={"missing": {"intensity": 0}})
+    mocker.patch.object(renpy.display.im.cache, "get_textures")
+    with pytest.raises(ValueError, match="Unknown imported light"):
+        model.render(400, 300, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"light_direction": (0, 0, 0)},
+        {"light_direction": (0, math.inf, 1)},
+        {"light_color": (1, -1, 1)},
+        {"environment_intensity": -1},
+        {"environment_rotation": math.nan},
+        {"exposure": -1},
+        {"exposure": "1"},
+        {"environment": renpy.display.layout.Null()},
+        {"environment_quality": "ultra"},
+        {"meters_per_unit": 0},
+        {"shadows": 1},
+        {"shadow_size": 63},
+        {"shadow_size": 2049},
+        {"shadow_bias": -0.001},
+        {"transmission": 1},
+        {"transparency_layers": True},
+        {"transparency_layers": -1},
+        {"transparency_layers": 9},
+        {"refraction_margin": -0.1},
+        {"refraction_margin": 0.6},
+        {"refraction_margin": math.nan},
+        {"shadow_cascades": True},
+        {"shadow_cascades": 3},
+        {"shadow_distance": 0},
+        {"shadow_distance": -1},
+        {"shadow_distance": math.inf},
+        {"colored_shadows": 1},
+        {"caustics": 1},
+        {"lights": [object()]},
+        {"import_lights": 1},
+    ],
+)
+def test_pbr_scene_rejects_invalid_lighting(options):
+    """Invalid lighting fails before rendering rather than feeding non-finite values or unsupported textures to GLSL."""
+    with pytest.raises(ValueError):
+        assimp.GLTFScene(renpy.display.layout.Null(), **options)
+
+
+def test_pbr_scene_pickles_environment_and_lighting():
+    """A saved scene retains its lighting and image graph without storing GPU resources or cached renders."""
+    scene = assimp.GLTFScene(renpy.display.layout.Null(), light_direction=(0, -3, 4),
+        light_color=(4, 2, 1), environment=renpy.display.im.Null("#808080"),
+        environment_rotation=90, environment_intensity=2, exposure=0.5)
+    restored = pickle.loads(pickle.dumps(scene))
+    assert restored.light_direction == pytest.approx((0, -0.6, 0.8))
+    assert restored.light_color == (4, 2, 1)
+    assert restored.environment_intensity == 2
+    assert restored.environment_rotation == 90
+    assert restored.exposure == 0.5
+    assert restored.visit()[0] is restored.child
+    assert restored.environment.textures[0].displayable.srgb
+
+
+# Named scene instances and node-transform animation.
+
+@pytest.mark.parametrize("options", [
+    {"box_max": (0, 0, 0)}, {"position": (2, 0, 0)}, {"position": (-1, 0, 0)},
+    {"fade": -1}, {"intensity": math.nan}, {"rotation": math.inf},
+])
+def test_reflection_probe_rejects_invalid_box_and_lighting(options):
+    """A finite capture must be inside a nonempty box; invalid values never reach GPU ray-box division."""
+    settings = {"position": (0, 0, 0), "box_min": (-1, -1, -1), "box_max": (1, 1, 1)}
+    settings.update(options)
+    with pytest.raises(ValueError):
+        assimp.GLTFReflectionProbe(renpy.display.im.Null("#fff"), **settings)
+
+
+def test_reflection_probe_scene_pickles_only_saved_image_graph():
+    """Probes and their filtering quality survive saves without serializing native textures or render-cache entries."""
+    probe = assimp.GLTFReflectionProbe("room.hdr", position=(0, 0, 0), box_min=(-1, -2, -3),
+        box_max=(1, 2, 3), rotation=90, fade=0.25, intensity=2)
+    scene = assimp.GLTFScene(renpy.display.layout.Null(), reflection_probes=(probe,), environment_quality="high")
+    restored = pickle.loads(pickle.dumps(scene))
+    assert restored.reflection_probes[0].box_min == (-1, -2, -3)
+    assert restored.reflection_probes[0].rotation == 90
+    assert restored.environment_quality == "high"
+    assert not restored.reflection_models[0].textures[0].displayable.srgb
+    with pytest.raises(ValueError, match="at most two"):
+        assimp.GLTFScene(renpy.display.layout.Null(), reflection_probes=(probe,) * 3)
+
+
+def test_old_environment_scene_shape_uses_no_local_probes():
+    """Saved scenes from before local probes keep their original lighting with compatibility defaults."""
+    scene = assimp.GLTFScene(renpy.display.layout.Null(), environment="room.png")
+    for name in ("reflection_probes", "reflection_models", "environment_quality", "environment_fallback"):
+        delattr(scene, name)
+    restored = pickle.loads(pickle.dumps(scene))
+    assert restored.reflection_probes == () and restored.reflection_models == ()
+    assert restored.environment_quality == "low"
+
+@pytest.fixture
+def scene_model(material_model, tmp_path):
+    """Reuse the real native import harness with a hierarchy and animation stored in three buffer transports."""
+    path = Path(__file__).parents[1] / "game/models/scene-controls.gltf"
+
+    def create(edit=None, transport="embedded", **kwargs):
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if edit is not None:
+            edit(document)
+        filename = tmp_path / ("scene.glb" if transport == "glb" else "scene.gltf")
+        binary = base64.b64decode(document["buffers"][0]["uri"].partition(",")[2])
+        if transport == "external":
+            document["buffers"][0]["uri"] = "scene.bin"
+            (tmp_path / "scene.bin").write_bytes(binary)
+        elif transport == "glb":
+            document["buffers"][0].pop("uri")
+        encoded = json.dumps(document).encode()
+        if transport == "glb":
+            encoded += b" " * (-len(encoded) % 4)
+            binary += b"\0" * (-len(binary) % 4)
+            encoded = (struct.pack("<4sII", b"glTF", 2, len(encoded) + len(binary) + 28)
+                + struct.pack("<I4s", len(encoded), b"JSON") + encoded
+                + struct.pack("<I4s", len(binary), b"BIN\0") + binary)
+        filename.write_bytes(encoded)
+        kwargs.setdefault("scene", True)
+        return assimp.GLTFModel(filename.as_posix(), material=True, **kwargs)
+
+    return create
+
+
+@pytest.mark.parametrize("transport", ["embedded", "external", "glb"])
+def test_native_scene_import_keeps_named_graph_and_animation(scene_model, transport):
+    """Real geometry and animation metadata load together from glTF data URIs, external buffers, and GLB BIN chunks."""
+    model = scene_model(transport=transport)
+    info = model.scene_info()
+    assert info["nodes"][1]["name"] == "Door" and info["nodes"][3]["parent"] == 1
+    assert info["materials"][0]["name"] == "DoorPaint"
+    assert info["animations"][0]["duration"] == 2
+    assert len(model.load().mesh_info) == 2
+
+
+def test_scene_instances_share_import_without_sharing_controls(scene_model):
+    """A different pose or paint choice reuses geometry; static imports retain a separate compatible cache entry."""
+    first = scene_model(animation="Slide", animation_time=0)
+    second = scene_model(node_overrides={"Door": {"visible": False}},
+        material_overrides={"WallPaint": {"u_color_base": (0, 1, 0, 1)}})
+    assert first.load() is second.load()
+    assert first.load() is not scene_model(scene=False).load()
+    assert first.node_overrides == () and first.material_overrides == ()
+
+
+def test_scene_import_keeps_multiple_roots_and_multi_primitive_nodes(scene_model):
+    """Source-node identities survive Assimp's synthetic root and the splitting of a source mesh into primitives."""
+    def edit(document):
+        document["scenes"][0]["nodes"] = [1, 2]
+        document["meshes"][0]["primitives"].append(dict(document["meshes"][1]["primitives"][0]))
+
+    model = scene_model(edit)
+    data = model.load()
+    assert len(data.blit_info) == 3
+    assert model.scene_info()["nodes"][0]["active"] is False
+    assert model.scene_info()["nodes"][3]["parent"] == 1
+    matrices, _visible = data.asset.pose((), "Slide", 1, False, 100)
+    assert matrices[1].transform(0, 0, 0, components=3) == pytest.approx((0, 0, 20), abs=1e-5)
+
+
+def test_scene_options_survive_pickling_without_native_data(scene_model):
+    """Saves retain immutable instance settings and recreate shared meshes and animation metadata on demand."""
+    model = scene_model(animation="Slide", animation_time=1, animation_speed=-1, animation_offset=2,
+        node_overrides={"Lamp": {"visible": False}},
+        material_overrides={"DoorPaint": {"u_tex_base_color": renpy.display.im.Null("#0f0")}})
+    model.load()
+    restored = pickle.loads(pickle.dumps(model))
+    assert restored.animation == "Slide" and restored.animation_time == 1
+    assert restored.animation_speed == -1 and restored.animation_offset == 2
+    assert restored.node_overrides == model.node_overrides
+    assert restored.scene_info()["animations"][0]["name"] == "Slide"
+
+
+def test_old_model_shape_preserves_static_import():
+    """Class defaults let pre-scene saves load with the original cache key and no automatic animation."""
+    model = assimp.GLTFModel("old.glb", shader="renpy.texture")
+    for name in ("scene", "node_overrides", "material_overrides", "animation", "animation_time",
+            "animation_loop", "animation_speed", "animation_offset"):
+        delattr(model, name)
+    restored = pickle.loads(pickle.dumps(model))
+    assert not restored.scene and restored.animation is None
+    assert restored.node_overrides == restored.material_overrides == ()
+    assert restored.cache_key == ("old.glb", False, 1.0, False, False)
+
+
+@pytest.fixture
+def deform_model(material_model, tmp_path):
+    """Import authored skin/morph data with duplicate joint names through the native material/file boundary."""
+    source = Path(__file__).parents[1] / "game/models/scene-deformation.gltf"
+
+    def create(edit=None, transport="embedded", **settings):
+        filename = tmp_path / ("deformation.glb" if transport == "glb" else "deformation.gltf")
+        if edit is not None or not filename.exists():
+            document = json.loads(source.read_text(encoding="utf-8"))
+            if edit is not None:
+                edit(document)
+            binary = base64.b64decode(document["buffers"][0]["uri"].partition(",")[2])
+            if transport == "external":
+                document["buffers"][0]["uri"] = "deformation.bin"
+                (tmp_path / "deformation.bin").write_bytes(binary)
+            elif transport == "glb":
+                document["buffers"][0].pop("uri")
+            encoded = json.dumps(document).encode("utf-8")
+            if transport == "glb":
+                encoded += b" " * (-len(encoded) % 4)
+                binary += b"\0" * (-len(binary) % 4)
+                encoded = (struct.pack("<4sII", b"glTF", 2, len(encoded) + len(binary) + 28)
+                    + struct.pack("<I4s", len(encoded), b"JSON") + encoded
+                    + struct.pack("<I4s", len(binary), b"BIN\0") + binary)
+            filename.write_bytes(encoded)
+        return assimp.GLTFModel(filename.as_posix(), scene=True, zoom=100, **settings)
+
+    return create
+
+
+@pytest.mark.parametrize("transport", ["embedded", "external", "glb"])
+def test_deformation_keeps_source_vertices_and_duplicate_joint_identities(deform_model, transport):
+    """Native postprocessing cannot deduplicate different morph identities or conflate joints with the same name."""
+    model = deform_model(transport=transport)
+    data = model.load()
+    assert len(data.mesh_info[0].mesh.get_points()) == 4
+    assert model.scene_info()["skins"][0]["joints"] == (3, 4)
+    assert model.scene_info()["warnings"] == ()
+    assert data.scene_memory_size > len(data.mesh_info[0].deformation.targets) * 4
+
+
+def test_morph_precedes_skin_and_preserves_earlier_meshes(deform_model):
+    """A shift in mesh space is skinned afterward; published earlier poses and imported bind geometry stay immutable."""
+    data = deform_model().load()
+    base = data.mesh_info[0].mesh
+    source = data.mesh_info[0].deformation
+    bones = (renpy.display.render.IDENTITY, renpy.display.matrix.Matrix.offset(.8, 0, 0))
+    first = assimp._deform_geometry(source, (0, 0), bones)
+    saved_points = first.get_points()
+    shifted = assimp._deform_geometry(source, (1, 0), bones)
+    assert [p[0] for p in shifted.get_points()] == pytest.approx([0, 1.6, 1.6, 0])
+    assert shifted.bounds == pytest.approx((0, -.4, 0, 1.6, .4, 0))
+    assert first.get_points() == saved_points
+    assert [p[0] for p in base.get_points()] == pytest.approx([-.4, .4, .4, -.4])
+    unskinned = assimp._deform_geometry(source, (1, 0), ())
+    assert [p[0] for p in unskinned.get_points()] == pytest.approx([0, .8, .8, 0])
+
+
+def test_clip_blend_restores_missing_channels_from_bind_pose(deform_model):
+    """A morph-only secondary clip blends joint translation back toward bind pose rather than leaving the primary joint fully bent."""
+    asset = deform_model().load().asset
+    matrices, visible, weights = asset.pose((), "Bend", 2, False, 100, ("Expand", .5, 2), True)
+    assert matrices[4].transform(0, 0, 0, components=3) == pytest.approx((40, 0, 0))
+    assert weights[1] == (.5, 0)
+    assert visible[1]
+    matrices, _visible, weights = asset.pose((), None, 0, False, 100, ("Expand", 1, 1), True)
+    assert matrices[4].transform(0, 0, 0, components=3) == (0, 0, 0)
+    assert weights[1] == (.5, 0)
+
+
+def test_deformation_large_mesh_bounds_and_cpu_cost(deform_model):
+    """A 16K-vertex pose exercises the native loop and bounds; timing is reported without a machine-dependent pass threshold."""
+    import array
+    import copy
+    import statistics
+    import time
+
+    source = copy.copy(deform_model().load().mesh_info[0].deformation)
+    repeats = 4096
+    count = source.count
+    source.positions = source.positions * repeats
+    source.attributes = source.attributes * repeats
+    source.handedness = source.handedness * repeats
+    source.targets = source.targets[:count * 9] * repeats + source.targets[count * 9:] * repeats
+    source.joint_indices = source.joint_indices * repeats
+    source.joint_weights = source.joint_weights * repeats
+    source.count *= repeats
+    source.joint_starts = array.array("I", range(source.count + 1))
+    source.triangles = array.array("I", (index + block * count for block in range(repeats) for index in source.triangles))
+    timings = []
+    for frame in range(20):
+        bones = (IDENTITY, renpy.display.matrix.Matrix.offset(.8 * frame / 19, 0, 0))
+        started = time.perf_counter()
+        mesh = assimp._deform_geometry(source, (.5, .25), bones)
+        timings.append((time.perf_counter() - started) * 1000)
+    assert mesh.bounds == pytest.approx((-.2, -.4, 0, 1.4, .4, 0))
+    assert len(mesh.get_points()) == 16384
+    print(json.dumps({"vertices": source.count, "morph_targets": 2, "joints": 2,
+        "median_cpu_ms": statistics.median(timings), "max_cpu_ms": max(timings)}))
+
+
+def test_morph_overrides_are_independent_of_shared_bind_pose(deform_model):
+    """Node-level weights override animated values without mutating the source mesh defaults or marking its matrix changed."""
+    asset = deform_model().load().asset
+    overrides = renpy.gl2.gltfscene.node_overrides({"Pane": {"weights": [-.5, 2]}})
+    matrices, _visible, weights = asset.pose(overrides, "Expand", 2, False, 100, include_weights=True)
+    assert weights[1] == (-.5, 2)
+    assert matrices[1].transform(0, 0, 0, components=3) == (9900, 0, 0)
+    assert asset.pose((), None, 0, False, 100, include_weights=True)[2][1] == (0, 0)
+
+
+def append_deformation_accessor(document, values, kind, component=5126):
+    """Add one small independent data URI, keeping source vertex identities and native file I/O intact."""
+    formats = {5126: "f", 5121: "B"}
+    data = struct.pack("<" + formats[component] * len(values), *values)
+    document["buffers"].append({"byteLength": len(data), "uri": "data:application/octet-stream;base64," + base64.b64encode(data).decode()})
+    document["bufferViews"].append({"buffer": len(document["buffers"]) - 1, "byteLength": len(data)})
+    document["accessors"].append({"bufferView": len(document["bufferViews"]) - 1, "componentType": component,
+        "count": len(values) // {"SCALAR": 1, "VEC4": 4}[kind], "type": kind})
+    return len(document["accessors"]) - 1
+
+
+def test_skin_preserves_more_than_four_influences_and_optional_bind_matrices(deform_model):
+    """JOINTS_1 contributes to every vertex; an omitted inverse-bind stream means identity rather than vendor limits."""
+    def edit(document):
+        document["nodes"].extend({"name": "Bone"} for _ in range(4))
+        document["nodes"][2]["children"].extend([6, 7, 8, 9])
+        document["skins"][0]["joints"].extend([6, 7, 8, 9])
+        document["skins"][0].pop("inverseBindMatrices")
+        attributes = document["meshes"][0]["primitives"][0]["attributes"]
+        for name, values, component in (
+            ("JOINTS_0", [0, 1, 2, 3] * 4, 5121), ("JOINTS_1", [4, 5, 0, 0] * 4, 5121),
+            ("WEIGHTS_0", [1/6] * 16, 5126), ("WEIGHTS_1", [1/6, 1/6, 0, 0] * 4, 5126),
+        ):
+            attributes[name] = append_deformation_accessor(document, values, "VEC4", component)
+
+    data = deform_model(edit).load()
+    source = data.mesh_info[0].deformation
+    bones = tuple(renpy.display.matrix.Matrix.offset(i, 0, 0) for i in range(6))
+    mesh = assimp._deform_geometry(source, (0, 0), bones)
+    assert [p[0] for p in mesh.get_points()] == pytest.approx([2.1, 2.9, 2.9, 2.1])
+
+
+@pytest.mark.parametrize("mode, expected", [("STEP", 0), ("LINEAR", .25), ("CUBICSPLINE", .15625)])
+def test_weight_animation_interpolates_complete_target_vectors(deform_model, mode, expected):
+    """Flattened SCALAR streams group all morph targets per key, including Hermite tangent/value triplets."""
+    def edit(document):
+        sampler = document["animations"][1]["samplers"][0]
+        sampler["interpolation"] = mode
+        if mode == "CUBICSPLINE":
+            sampler["output"] = append_deformation_accessor(document, [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0], "SCALAR")
+
+    asset = deform_model(edit).load().asset
+    assert asset.pose((), "Expand", .5, False, 100, include_weights=True)[2][1] == pytest.approx((expected, 0))
+
+
+@pytest.mark.parametrize("edit, message", [
+    (lambda d: d["skins"][0].update(joints=[3, 3]), "unique joint"),
+    (lambda d: d["skins"][0].update(skeleton=4), "ancestor"),
+    (lambda d: d["nodes"][1].update(weights=[1]), "target count"),
+    (lambda d: d["meshes"][0]["primitives"][0]["attributes"].pop("WEIGHTS_0"), "joint/weight"),
+    (lambda d: d["meshes"][0]["primitives"][0]["targets"][0].update(POSITION=10), "VEC3"),
+])
+def test_invalid_deformation_metadata_fails_before_render(deform_model, edit, message):
+    """Malformed rigs and weight counts fail during loading, before native deformation or GPU upload."""
+    with pytest.raises((ValueError, TypeError), match=message):
+        deform_model(edit).load()
+
+
+def test_blended_animation_controls_survive_old_and_new_save_shapes(deform_model):
+    """Blend controls are immutable saved settings; old saved models retain the single-clip behavior."""
+    model = deform_model(animation="Bend", animation_blend=("Expand", .75), animation_blend_duration=2,
+        animation_blend_time=1)
+    restored = pickle.loads(pickle.dumps(model))
+    assert restored.animation_blend == ("Expand", .75)
+    assert restored.animation_blend_duration == 2 and restored.animation_blend_time == 1
+    for name in ("animation_blend", "animation_blend_duration", "animation_blend_time"):
+        delattr(model, name)
+    restored = pickle.loads(pickle.dumps(model))
+    assert restored.animation_blend is None and restored.animation_blend_duration == 0
+
+
+@pytest.mark.parametrize("options", [
+    {"scene": 1}, {"node_overrides": []}, {"node_overrides": {"Door": {"visible": 1}}},
+    {"node_overrides": {"Door": {"translation": (0, math.inf, 0)}}},
+    {"node_overrides": {"Door": {"rotation": (0, 0, 0, 0)}}},
+    {"node_overrides": {"Door": {"unknown": 1}}}, {"material_overrides": []},
+    {"material_overrides": {"Paint": {"color": (1, 0, 0, 1)}}},
+    {"animation": True}, {"animation_loop": 1}, {"animation_time": math.nan},
+    {"animation_speed": math.inf}, {"animation_offset": "1"},
+])
+def test_scene_rejects_invalid_instance_settings(options):
+    """Invalid instance settings fail during construction, before prediction or GPU resource allocation."""
+    with pytest.raises((ValueError, TypeError)):
+        assimp.GLTFModel("unread.gltf", material=True, **options)

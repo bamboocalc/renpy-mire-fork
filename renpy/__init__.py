@@ -269,6 +269,7 @@ name_blacklist = {
     "renpy.gl2.assimp.loader",
     "renpy.gl2.assimp.loader_lock",
     "renpy.gl2.assimp.cache_lock",
+    "renpy.gl2.assimp.__pyx_unpickle_Enum",  # Cython's generated memoryview helper has no reload state.
     "renpy.gl2.gl2draw.default_position",
     "renpy.asynctask.default_runner",
     "renpy.asynctask._sync_state",
@@ -581,6 +582,7 @@ def import_all():
     import renpy.gl2.live2d
     import renpy.gl2.assimp
     import renpy.gl2.gltf
+    import renpy.gl2.gltfscene
 
     import renpy.minstore
     import renpy.defaultstore

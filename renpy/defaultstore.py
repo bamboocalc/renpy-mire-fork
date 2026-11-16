@@ -186,6 +186,11 @@ Live2D = renpy.gl2.live2d.Live2D
 
 Model = renpy.display.model.Model
 GLTFModel = renpy.gl2.assimp.GLTFModel
+GLTFCamera = renpy.gl2.assimp.GLTFCamera
+GLTFScene = renpy.gl2.assimp.GLTFScene
+GLTFReflectionProbe = renpy.gl2.assimp.GLTFReflectionProbe
+GLTFDepthOfField = renpy.gl2.assimp.GLTFDepthOfField
+GLTFLight = renpy.gl2.gltf.GLTFLight
 
 # Currying things.
 Alpha = renpy.curry.curry(renpy.display.layout.Alpha)

@@ -1,0 +1,1439 @@
+{
+  "asset": {
+    "version": "2.0"
+  },
+  "buffers": [
+    {
+      "byteLength": 940,
+      "uri": "data:application/octet-stream;base64,AACAPwAAgL8AAIC/AACAPwAAgD8AAIC/AACAPwAAgD8AAIA/AACAPwAAgL8AAIA/AACAvwAAgL8AAIA/AACAvwAAgD8AAIA/AACAvwAAgD8AAIC/AACAvwAAgL8AAIC/AACAvwAAgD8AAIC/AACAvwAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAIC/AACAvwAAgL8AAIA/AACAvwAAgL8AAIC/AACAPwAAgL8AAIC/AACAPwAAgL8AAIA/AACAvwAAgL8AAIA/AACAPwAAgL8AAIA/AACAPwAAgD8AAIA/AACAvwAAgD8AAIA/AACAPwAAgL8AAIC/AACAvwAAgL8AAIC/AACAvwAAgD8AAIC/AACAPwAAgD8AAIC/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AACAPwAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AACAPwAAAAAAAIA/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAAAAAAAAAgD8AAEBAAACAQAAAwEAAAAAAAAAAAAAAAAAAAIA/AAAAAGmMEL8AAAAAMklTPwAAAABpjBC/AAAAADJJUz8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPw=="
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 288
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 288,
+      "byteLength": 288
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 576,
+      "byteLength": 192
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 768,
+      "byteLength": 72
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 840,
+      "byteLength": 20
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 860,
+      "byteLength": 80
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -1,
+        -1,
+        -1
+      ],
+      "max": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 36,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 5,
+      "type": "SCALAR",
+      "min": [
+        0
+      ],
+      "max": [
+        6
+      ]
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 5,
+      "type": "VEC4"
+    }
+  ],
+  "materials": [
+    {
+      "name": "Plaster",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.55,
+          0.5,
+          0.4,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.9
+      }
+    },
+    {
+      "name": "Wood",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.2,
+          0.07,
+          0.025,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.6
+      }
+    },
+    {
+      "name": "Fabric",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.03,
+          0.1,
+          0.18,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      }
+    },
+    {
+      "name": "Metal",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.8,
+          0.6,
+          0.2,
+          1
+        ],
+        "metallicFactor": 1,
+        "roughnessFactor": 0.2
+      }
+    },
+    {
+      "name": "Glass",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.9,
+          1,
+          0.95,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.08
+      },
+      "extensions": {
+        "KHR_materials_transmission": {
+          "transmissionFactor": 1
+        },
+        "KHR_materials_volume": {
+          "thicknessFactor": 0.05,
+          "attenuationColor": [
+            0.8,
+            0.95,
+            1
+          ],
+          "attenuationDistance": 5
+        },
+        "KHR_materials_ior": {
+          "ior": 1.5
+        }
+      }
+    },
+    {
+      "name": "LampGlow",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.9,
+          0.7,
+          0.4,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      },
+      "emissiveFactor": [
+        1,
+        0.7,
+        0.3
+      ],
+      "extensions": {
+        "KHR_materials_emissive_strength": {
+          "emissiveStrength": 3
+        }
+      }
+    }
+  ],
+  "extensionsUsed": [
+    "KHR_lights_punctual",
+    "KHR_materials_transmission",
+    "KHR_materials_volume",
+    "KHR_materials_ior",
+    "KHR_materials_emissive_strength"
+  ],
+  "meshes": [
+    {
+      "name": "PlasterBox",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0
+        }
+      ]
+    },
+    {
+      "name": "WoodBox",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "FabricBox",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 2
+        }
+      ]
+    },
+    {
+      "name": "MetalBox",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 3
+        }
+      ]
+    },
+    {
+      "name": "GlassBox",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 4
+        }
+      ]
+    },
+    {
+      "name": "LampGlowBox",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 5
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "Room",
+      "children": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72
+      ]
+    },
+    {
+      "name": "Floor",
+      "mesh": 1,
+      "translation": [
+        0,
+        -1.9,
+        -0.5
+      ],
+      "scale": [
+        5.0,
+        0.1,
+        4.0
+      ]
+    },
+    {
+      "name": "BackWall",
+      "mesh": 0,
+      "translation": [
+        0,
+        0,
+        -4.4
+      ],
+      "scale": [
+        5.0,
+        1.8,
+        0.1
+      ]
+    },
+    {
+      "name": "LeftWall",
+      "mesh": 0,
+      "translation": [
+        -5,
+        0,
+        -0.5
+      ],
+      "scale": [
+        0.1,
+        1.8,
+        4.0
+      ]
+    },
+    {
+      "name": "RightWall",
+      "mesh": 0,
+      "translation": [
+        5,
+        0,
+        -0.5
+      ],
+      "scale": [
+        0.1,
+        1.8,
+        4.0
+      ]
+    },
+    {
+      "name": "BedFrame",
+      "mesh": 1,
+      "translation": [
+        -1.5,
+        -1.45,
+        -1
+      ],
+      "scale": [
+        1.25,
+        0.3,
+        1.9
+      ]
+    },
+    {
+      "name": "Mattress",
+      "mesh": 2,
+      "translation": [
+        -1.5,
+        -1.02,
+        -1
+      ],
+      "scale": [
+        1.2,
+        0.15,
+        1.85
+      ]
+    },
+    {
+      "name": "Pillow",
+      "mesh": 0,
+      "translation": [
+        -1.5,
+        -0.78,
+        -2.4
+      ],
+      "scale": [
+        0.75,
+        0.1,
+        0.35
+      ]
+    },
+    {
+      "name": "Desk",
+      "mesh": 1,
+      "translation": [
+        3.1,
+        -0.65,
+        -2.6
+      ],
+      "scale": [
+        1.4,
+        0.075,
+        0.6
+      ]
+    },
+    {
+      "name": "DeskLeg",
+      "mesh": 3,
+      "translation": [
+        2,
+        -1.25,
+        -3
+      ],
+      "scale": [
+        0.05,
+        0.65,
+        0.05
+      ]
+    },
+    {
+      "name": "DeskLeg",
+      "mesh": 3,
+      "translation": [
+        2,
+        -1.25,
+        -2.2
+      ],
+      "scale": [
+        0.05,
+        0.65,
+        0.05
+      ]
+    },
+    {
+      "name": "DeskLeg",
+      "mesh": 3,
+      "translation": [
+        4.2,
+        -1.25,
+        -3
+      ],
+      "scale": [
+        0.05,
+        0.65,
+        0.05
+      ]
+    },
+    {
+      "name": "DeskLeg",
+      "mesh": 3,
+      "translation": [
+        4.2,
+        -1.25,
+        -2.2
+      ],
+      "scale": [
+        0.05,
+        0.65,
+        0.05
+      ]
+    },
+    {
+      "name": "Shelf",
+      "mesh": 1,
+      "translation": [
+        -3.9,
+        -1.4,
+        -3.6
+      ],
+      "scale": [
+        0.8,
+        0.05,
+        0.4
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -4.55,
+        -1.06,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.275,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -4.41,
+        -1.06,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.29000000000000004,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -4.27,
+        -1.06,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.30500000000000005,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -4.13,
+        -1.06,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.32,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.9899999999999998,
+        -1.06,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.275,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.8499999999999996,
+        -1.06,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.29000000000000004,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -3.71,
+        -1.06,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.30500000000000005,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.57,
+        -1.06,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.32,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.4299999999999997,
+        -1.06,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.275,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -3.2899999999999996,
+        -1.06,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.29000000000000004,
+        0.275
+      ]
+    },
+    {
+      "name": "Shelf",
+      "mesh": 1,
+      "translation": [
+        -3.9,
+        -0.4999999999999999,
+        -3.6
+      ],
+      "scale": [
+        0.8,
+        0.05,
+        0.4
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -4.55,
+        -0.16000000000000003,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.275,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -4.41,
+        -0.16000000000000003,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.29000000000000004,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -4.27,
+        -0.16000000000000003,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.30500000000000005,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -4.13,
+        -0.16000000000000003,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.32,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.9899999999999998,
+        -0.16000000000000003,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.275,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.8499999999999996,
+        -0.16000000000000003,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.29000000000000004,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -3.71,
+        -0.16000000000000003,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.30500000000000005,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.57,
+        -0.16000000000000003,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.32,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.4299999999999997,
+        -0.16000000000000003,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.275,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -3.2899999999999996,
+        -0.16000000000000003,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.29000000000000004,
+        0.275
+      ]
+    },
+    {
+      "name": "Shelf",
+      "mesh": 1,
+      "translation": [
+        -3.9,
+        0.40000000000000013,
+        -3.6
+      ],
+      "scale": [
+        0.8,
+        0.05,
+        0.4
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -4.55,
+        0.74,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.275,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -4.41,
+        0.74,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.29000000000000004,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -4.27,
+        0.74,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.30500000000000005,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -4.13,
+        0.74,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.32,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.9899999999999998,
+        0.74,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.275,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.8499999999999996,
+        0.74,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.29000000000000004,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -3.71,
+        0.74,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.30500000000000005,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.57,
+        0.74,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.32,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 2,
+      "translation": [
+        -3.4299999999999997,
+        0.74,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.275,
+        0.275
+      ]
+    },
+    {
+      "name": "Book",
+      "mesh": 0,
+      "translation": [
+        -3.2899999999999996,
+        0.74,
+        -3.6
+      ],
+      "scale": [
+        0.05,
+        0.29000000000000004,
+        0.275
+      ]
+    },
+    {
+      "name": "DoorPivot",
+      "translation": [
+        1.3,
+        -1.8,
+        -4.2
+      ],
+      "children": [
+        47,
+        48
+      ]
+    },
+    {
+      "name": "Door",
+      "mesh": 1,
+      "translation": [
+        0.65,
+        1.05,
+        0
+      ],
+      "scale": [
+        0.65,
+        1.05,
+        0.05
+      ]
+    },
+    {
+      "name": "DoorHandle",
+      "mesh": 3,
+      "translation": [
+        1.15,
+        1.05,
+        0.12
+      ],
+      "scale": [
+        0.125,
+        0.03,
+        0.04
+      ]
+    },
+    {
+      "name": "GlassPartition",
+      "mesh": 4,
+      "translation": [
+        2.7,
+        -0.2,
+        0.7
+      ],
+      "scale": [
+        1.2,
+        1.4,
+        0.03
+      ]
+    },
+    {
+      "name": "LampBase",
+      "mesh": 3,
+      "translation": [
+        -3,
+        -1.5,
+        1
+      ],
+      "scale": [
+        0.25,
+        0.25,
+        0.25
+      ]
+    },
+    {
+      "name": "LampStem",
+      "mesh": 3,
+      "translation": [
+        -3,
+        -0.5,
+        1
+      ],
+      "scale": [
+        0.04,
+        0.85,
+        0.04
+      ]
+    },
+    {
+      "name": "LampShade",
+      "mesh": 5,
+      "translation": [
+        -3,
+        0.5,
+        1
+      ],
+      "scale": [
+        0.3,
+        0.2,
+        0.3
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 0,
+      "translation": [
+        -4.2,
+        -1.65,
+        2.0
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 1,
+      "translation": [
+        -2.5500000000000003,
+        -1.65,
+        2.0
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 2,
+      "translation": [
+        -0.9000000000000004,
+        -1.65,
+        2.0
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 3,
+      "translation": [
+        0.7499999999999991,
+        -1.65,
+        2.0
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 0,
+      "translation": [
+        2.3999999999999995,
+        -1.65,
+        2.0
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 1,
+      "translation": [
+        4.05,
+        -1.65,
+        2.0
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 2,
+      "translation": [
+        -4.2,
+        -1.65,
+        2.4
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 3,
+      "translation": [
+        -2.5500000000000003,
+        -1.65,
+        2.4
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 0,
+      "translation": [
+        -0.9000000000000004,
+        -1.65,
+        2.4
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 1,
+      "translation": [
+        0.7499999999999991,
+        -1.65,
+        2.4
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 2,
+      "translation": [
+        2.3999999999999995,
+        -1.65,
+        2.4
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 3,
+      "translation": [
+        4.05,
+        -1.65,
+        2.4
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 0,
+      "translation": [
+        -4.2,
+        -1.65,
+        2.8
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 1,
+      "translation": [
+        -2.5500000000000003,
+        -1.65,
+        2.8
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 2,
+      "translation": [
+        -0.9000000000000004,
+        -1.65,
+        2.8
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 3,
+      "translation": [
+        0.7499999999999991,
+        -1.65,
+        2.8
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 0,
+      "translation": [
+        2.3999999999999995,
+        -1.65,
+        2.8
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "FloorProp",
+      "mesh": 1,
+      "translation": [
+        4.05,
+        -1.65,
+        2.8
+      ],
+      "scale": [
+        0.075,
+        0.15,
+        0.075
+      ]
+    },
+    {
+      "name": "WarmLamp",
+      "translation": [
+        -3,
+        0.4,
+        1
+      ],
+      "extensions": {
+        "KHR_lights_punctual": {
+          "light": 0
+        }
+      }
+    },
+    {
+      "name": "CoolSpot",
+      "translation": [
+        3,
+        1.4,
+        3
+      ],
+      "extensions": {
+        "KHR_lights_punctual": {
+          "light": 1
+        }
+      }
+    }
+  ],
+  "scenes": [
+    {
+      "name": "DesktopRoomBenchmark",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "scene": 0,
+  "extensions": {
+    "KHR_lights_punctual": {
+      "lights": [
+        {
+          "name": "WarmLamp",
+          "type": "point",
+          "intensity": 75,
+          "color": [
+            1,
+            0.7,
+            0.4
+          ],
+          "range": 12
+        },
+        {
+          "name": "CoolSpot",
+          "type": "spot",
+          "intensity": 100,
+          "color": [
+            0.5,
+            0.7,
+            1
+          ],
+          "range": 12,
+          "spot": {
+            "innerConeAngle": 0.4,
+            "outerConeAngle": 1
+          }
+        }
+      ]
+    }
+  },
+  "animations": [
+    {
+      "name": "DoorCycle",
+      "samplers": [
+        {
+          "input": 4,
+          "output": 5
+        }
+      ],
+      "channels": [
+        {
+          "sampler": 0,
+          "target": {
+            "node": 46,
+            "path": "rotation"
+          }
+        }
+      ]
+    }
+  ]
+}

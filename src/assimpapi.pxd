@@ -22,6 +22,10 @@ cdef extern from "assimp/vector3.h":
         float y
         float z
 
+cdef extern from "assimp/color4.h":
+    cdef struct aiColor4D:
+        float r, g, b, a
+
 cdef extern from "assimp/matrix4x4.h":
     cdef struct aiMatrix4x4:
         float a1, a2, a3, a4
@@ -93,6 +97,7 @@ cdef extern from "assimp/mesh.h":
         aiVector3D *mTangents
         aiVector3D *mBitangents
         aiVector2D **mTextureCoords
+        aiColor4D **mColors
 
         aiFace *mFaces
 
@@ -196,6 +201,13 @@ cdef extern from "assimp/material.h":
         unsigned int index,
         int *pOut,
         unsigned int *pMax)
+
+    aiReturn aiGetMaterialString(
+        const aiMaterial *pMat,
+        const char *pKey,
+        unsigned int type,
+        unsigned int index,
+        aiString *pOut)
 
 cdef extern from "assimp/texture.h":
     cdef struct aiTexture:
