@@ -610,6 +610,98 @@ def _deform_geometry(source, weights, matrices):
     return mesh
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def _pack_deform_vertices(Py_ssize_t count, const double[::1] normals, const float[::1] tangents,
+        const float[::1] uv0, const float[::1] uv1, const float[::1] colors, int color_width):
+    """Interleave GLTF_T_LAYOUT attributes and tangent signs; bitangents use double precision, as before."""
+    cdef Py_ssize_t stride = renpy.gl2.gl2mesh.GLTF_T_LAYOUT.stride, vertex, o
+    cdef double nx, ny, nz, tx, ty, tz, sign
+    if (stride != 17 or color_width not in (3, 4) or normals.shape[0] != count * 3 or tangents.shape[0] != count * 4
+            or uv0.shape[0] != count * 2 or uv1.shape[0] != count * 2 or colors.shape[0] != count * color_width):
+        raise ValueError("Deformation vertex streams must have identical counts.")
+    attributes = array.array("f", bytes(count * stride * 4))
+    handedness = array.array("f", bytes(count * 4))
+    cdef float[::1] out = attributes
+    cdef float[::1] signs = handedness
+    for vertex in range(count):
+        sign = tangents[vertex * 4 + 3]
+        if fabs(fabs(sign) - 1.0) > 0.001:
+            raise ValueError("Tangent handedness must be -1 or 1.")
+        nx, ny, nz = normals[vertex * 3], normals[vertex * 3 + 1], normals[vertex * 3 + 2]
+        tx, ty, tz = tangents[vertex * 4], tangents[vertex * 4 + 1], tangents[vertex * 4 + 2]
+        o = vertex * stride
+        out[o], out[o + 1] = uv0[vertex * 2], uv0[vertex * 2 + 1]
+        out[o + 2], out[o + 3], out[o + 4] = <float> nx, <float> ny, <float> nz
+        out[o + 5], out[o + 6], out[o + 7] = <float> tx, <float> ty, <float> tz
+        out[o + 8] = <float> ((ny * tz - nz * ty) * sign)
+        out[o + 9] = <float> ((nz * tx - nx * tz) * sign)
+        out[o + 10] = <float> ((nx * ty - ny * tx) * sign)
+        out[o + 11], out[o + 12] = uv1[vertex * 2], uv1[vertex * 2 + 1]
+        out[o + 13] = colors[vertex * color_width]
+        out[o + 14] = colors[vertex * color_width + 1]
+        out[o + 15] = colors[vertex * color_width + 2]
+        out[o + 16] = colors[vertex * color_width + 3] if color_width == 4 else 1.0
+        signs[vertex] = <float> sign
+    return attributes, handedness
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def _interleave_targets(Py_ssize_t count, const float[::1] positions, const float[::1] normals, const float[::1] tangents):
+    """One morph target as per-vertex position, normal and tangent deltas."""
+    cdef Py_ssize_t vertex, component
+    if positions.shape[0] != count * 3 or normals.shape[0] != count * 3 or tangents.shape[0] != count * 3:
+        raise ValueError("Morph streams must match the base vertex count.")
+    result = array.array("f", bytes(count * 36))
+    cdef float[::1] out = result
+    for vertex in range(count):
+        for component in range(3):
+            out[vertex * 9 + component] = positions[vertex * 3 + component]
+            out[vertex * 9 + 3 + component] = normals[vertex * 3 + component]
+            out[vertex * 9 + 6 + component] = tangents[vertex * 3 + component]
+    return result
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def _pack_skin(Py_ssize_t count, Py_ssize_t sets, const double[::1] joints, const double[::1] weights):
+    """Nonzero influences per vertex, set by set, normalized by their double-precision sum."""
+    cdef Py_ssize_t vertex, set_index, k, position, filled = 0, size = count * 4 * sets
+    cdef double weight, total
+    cdef long max_joint = -1
+    if joints.shape[0] != size or weights.shape[0] != size:
+        raise ValueError("Skin weights must be between zero and one and match the vertex count.")
+    for position in range(size):
+        if not 0.0 <= weights[position] <= 1.0:
+            raise ValueError("Skin weights must be between zero and one and match the vertex count.")
+        if <long> joints[position] > max_joint:
+            max_joint = <long> joints[position]
+    starts = array.array("I", bytes((count + 1) * 4))
+    indices = array.array("I", bytes(size * 4))
+    normalized = array.array("f", bytes(size * 4))
+    cdef unsigned int[::1] start_view = starts
+    cdef unsigned int[::1] index_view = indices
+    cdef float[::1] weight_view = normalized
+    for vertex in range(count):
+        total = 0.0
+        for set_index in range(sets):
+            for k in range(4):
+                total += weights[(set_index * count + vertex) * 4 + k]
+        if sets and total == 0.0:
+            raise ValueError("Every skinned vertex requires a nonzero joint weight.")
+        for set_index in range(sets):
+            for k in range(4):
+                position = (set_index * count + vertex) * 4 + k
+                weight = weights[position]
+                if weight != 0.0:
+                    index_view[filled] = <unsigned int> joints[position]
+                    weight_view[filled] = <float> (weight / total)
+                    filled += 1
+        start_view[vertex + 1] = <unsigned int> filled
+    return starts, indices[:filled], normalized[:filled], max_joint
+
+
 cdef class Loader:
 
     cdef public str dirname

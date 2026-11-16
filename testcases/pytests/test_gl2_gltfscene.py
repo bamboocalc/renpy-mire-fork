@@ -290,3 +290,38 @@ def test_asset_diagnostics_distinguish_optional_and_required_extensions(document
     document["extensionsRequired"] = ["KHR_materials_iridescence"]
     with pytest.raises(ValueError, match="required.*iridescence"):
         gltfscene.Asset(document, "scene.gltf")
+
+
+@pytest.mark.parametrize("layout", ["packed", "strided", "normalized", "sparse", "nan"])
+def test_flat_geometry_matches_row_decoding(layout):
+    """Deformation streams read flat take the packed float32 copy or the row fallback and must agree with row decoding."""
+    first, second = (1.5, -2.0, 3.25), (0.0, math.nan if layout == "nan" else 4.0, -1.0)
+    accessor = {"bufferView": 0, "count": 2, "type": "VEC3", "componentType": 5126}
+    view = {"buffer": 0}
+    if layout == "normalized":
+        payload = struct.pack("<6B2x", 0, 128, 255, 64, 1, 2)
+        accessor.update(componentType=5121, normalized=True)
+    elif layout == "strided":
+        payload = struct.pack("<8f", *first, 99, *second, 99)
+        view["byteStride"] = 16
+    else:
+        payload = struct.pack("<6f", *first, *second)
+    view["byteLength"] = len(payload)
+    views = [view]
+    if layout == "sparse":
+        views += [{"buffer": 0, "byteOffset": len(payload), "byteLength": 4},
+            {"buffer": 0, "byteOffset": len(payload) + 4, "byteLength": 12}]
+        payload += struct.pack("<B3x3f", 1, 7.0, 8.0, 9.0)
+        accessor["sparse"] = {"count": 1, "indices": {"bufferView": 1, "componentType": 5121}, "values": {"bufferView": 2}}
+    document = {"buffers": [{"byteLength": len(payload),
+        "uri": "data:application/octet-stream;base64," + base64.b64encode(payload).decode()}],
+        "bufferViews": views, "accessors": [accessor]}
+    components, normalized = ((5121,), True) if layout == "normalized" else ((5126,), False)
+    if layout == "nan":
+        with pytest.raises(ValueError, match="finite"):
+            gltfscene.Accessors(document, "scene.gltf").geometry(0, "VEC3", components, normalized, flat=True)
+        return
+    rows = gltfscene.Accessors(document, "scene.gltf").geometry(0, "VEC3", components, normalized)
+    flat = gltfscene.Accessors(document, "scene.gltf").geometry(0, "VEC3", components, normalized, flat=True)
+    assert flat.typecode == "f" and len(flat) == 6
+    assert flat.tobytes() == struct.pack("<6f", *(value for row in rows for value in row))

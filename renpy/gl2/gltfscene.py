@@ -212,7 +212,7 @@ class Accessors:
             self.buffers[buffer_index] = memoryview(data)[:size]
         return self.buffers[buffer_index]
 
-    def rows(self, view_index, offset, count, component, width, stride=None):
+    def rows(self, view_index, offset, count, component, width, stride=None, raw=False):
         views = self.document.get("bufferViews", [])
         view = views[index(view_index, views, "bufferView")]
         data = self.buffer(view.get("buffer"))
@@ -228,11 +228,14 @@ class Accessors:
                 or (start + offset) % (row.size // width) or stride % (row.size // width)):
             raise ValueError("Animation accessor exceeds its buffer view.")
         if stride == row.size:
-            return tuple(row.iter_unpack(data[start + offset:start + offset + count * stride]))
+            packed = data[start + offset:start + offset + count * stride]
+            return bytes(packed) if raw else tuple(row.iter_unpack(packed))
+        if raw:
+            return None
         return tuple(row.unpack_from(data, start + offset + i * stride) for i in range(count))
 
-    def read(self, accessor_index, kind, rotation=False, geometry=False):
-        key = (accessor_index, kind, rotation, geometry)
+    def read(self, accessor_index, kind, rotation=False, geometry=False, flat=False):
+        key = (accessor_index, kind, rotation, geometry, flat)
         if key in self.accessors:
             return self.accessors[key]
         accessors = self.document.get("accessors", [])
@@ -248,6 +251,20 @@ class Accessors:
         if component == 5126 and normalized:
             raise ValueError("Float animation accessors cannot be normalized.")
         width = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}[kind]
+        if flat and component == 5126 and "bufferView" in source and "sparse" not in source:
+            views = self.document.get("bufferViews", [])
+            view = views[index(source["bufferView"], views, "bufferView")]
+            packed = self.rows(source["bufferView"], source.get("byteOffset", 0), count, component,
+                width, view.get("byteStride"), raw=True)
+            if packed is not None:
+                result = array.array("f")
+                result.frombytes(packed)
+                if sys.byteorder == "big":
+                    result.byteswap()
+                if not all(map(math.isfinite, result)):
+                    raise ValueError("Animation samples must be finite.")
+                self.accessors[key] = result
+                return result
         if "bufferView" in source:
             views = self.document.get("bufferViews", [])
             view = views[index(source["bufferView"], views, "bufferView")]
@@ -282,17 +299,17 @@ class Accessors:
         # Only float32 components can hold infinities or NaN.
         if component == 5126 and not all(map(math.isfinite, itertools.chain.from_iterable(rows))):
             raise ValueError("Animation samples must be finite.")
-        result = tuple(rows)
+        result = array.array("f", itertools.chain.from_iterable(rows)) if flat else tuple(rows)
         self.accessors[key] = result
         return result
 
-    def geometry(self, accessor_index, kind, components=(5126,), normalized=False):
+    def geometry(self, accessor_index, kind, components=(5126,), normalized=False, flat=False):
         """Keep the component rules at the semantic boundary, before native buffers receive any values."""
         sources = self.document.get("accessors", [])
         source = sources[index(accessor_index, sources, "geometry accessor")]
         if source.get("componentType") not in components or source.get("normalized", False) is not normalized:
             raise ValueError("Invalid deformation accessor component type or normalization.")
-        return self.read(accessor_index, kind, geometry=True)
+        return self.read(accessor_index, kind, geometry=True, flat=flat)
 
 
 def morph_weights(value, count=None):
@@ -337,8 +354,8 @@ class DeformPrimitive:
 
     def __init__(self, primitive, reader):
         attributes = primitive.get("attributes", {})
-        positions = reader.geometry(attributes.get("POSITION"), "VEC3")
-        self.count = len(positions)
+        positions = reader.geometry(attributes.get("POSITION"), "VEC3", flat=True)
+        self.count = count = len(positions) // 3
         if "indices" in primitive:
             indices = [int(row[0]) for row in reader.geometry(primitive["indices"], "SCALAR", (5121, 5123, 5125))]
         else:
@@ -357,27 +374,35 @@ class DeformPrimitive:
         if not triangles:
             raise ValueError("Deforming mesh contains no triangles.")
 
-        def stream(name, kind, default, integer=False):
+        def stream(name, kind, default, integer=False, typecode="f"):
+            width = {"VEC2": 2, "VEC3": 3, "VEC4": 4}[kind]
             if name not in attributes:
-                return (default,) * self.count
+                return array.array(typecode, default) * count
             accessor = attributes[name]
             component = reader.document["accessors"][index(accessor, reader.document["accessors"], name)]["componentType"]
-            values = reader.geometry(accessor, kind, (5121, 5123, 5126) if integer else (5126,),
-                integer and component != 5126)
-            if len(values) != self.count:
+            normalized = integer and component != 5126
+            components = (5121, 5123, 5126) if integer else (5126,)
+            if typecode == "f":
+                values = reader.geometry(accessor, kind, components, normalized, flat=True)
+            else:
+                # Normalized integers stay double precision here, as the per-row path kept them.
+                values = array.array(typecode, itertools.chain.from_iterable(
+                    reader.geometry(accessor, kind, components, normalized)))
+            if len(values) != count * width:
                 raise ValueError("Deformation vertex streams must have identical counts.")
             return values
 
-        normals = stream("NORMAL", "VEC3", (0, 0, 0))
-        if "NORMAL" not in attributes:
-            normals = [[0.0, 0.0, 0.0] for _ in positions]
+        if "NORMAL" in attributes:
+            normals = array.array("d", stream("NORMAL", "VEC3", (0, 0, 0)))
+        else:
+            sums = [[0.0, 0.0, 0.0] for _ in range(count)]
             for a, b, c in triangles:
-                p = tuple(y - x for x, y in zip(positions[a], positions[b]))
-                q = tuple(y - x for x, y in zip(positions[a], positions[c]))
+                p = tuple(y - x for x, y in zip(positions[a * 3:a * 3 + 3], positions[b * 3:b * 3 + 3]))
+                q = tuple(y - x for x, y in zip(positions[a * 3:a * 3 + 3], positions[c * 3:c * 3 + 3]))
                 normal = renpy.gl2.gltf.cross(p, q)
                 for vertex in (a, b, c):
-                    normals[vertex] = [x + y for x, y in zip(normals[vertex], normal)]
-            normals = [tuple(v / max(math.hypot(*n), 1e-20) for v in n) for n in normals]
+                    sums[vertex] = [x + y for x, y in zip(sums[vertex], normal)]
+            normals = array.array("d", (v / max(math.hypot(*n), 1e-20) for n in sums for v in n))
         tangents = stream("TANGENT", "VEC4", (0, 0, 0, 1))
         uv0 = stream("TEXCOORD_0", "VEC2", (0, 0), True)
         uv1 = stream("TEXCOORD_1", "VEC2", (0, 0), True)
@@ -386,15 +411,9 @@ class DeformPrimitive:
         if color_kind not in ("VEC3", "VEC4"):
             raise ValueError("Vertex color requires VEC3 or VEC4.")
         colors = stream("COLOR_0", color_kind, (1, 1, 1, 1), True)
-        self.positions = array.array("f", itertools.chain.from_iterable(positions))
-        self.attributes = array.array("f")
-        self.handedness = array.array("f")
-        for n, t, uv, second, color in zip(normals, tangents, uv0, uv1, colors):
-            if abs(abs(t[3]) - 1) > 0.001:
-                raise ValueError("Tangent handedness must be -1 or 1.")
-            b = tuple(value * t[3] for value in renpy.gl2.gltf.cross(n, t[:3]))
-            self.attributes.extend((*uv, *n, *t[:3], *b, *second, *color, *((1,) if len(color) == 3 else ())))
-            self.handedness.append(t[3])
+        self.positions = positions
+        self.attributes, self.handedness = renpy.gl2.assimp._pack_deform_vertices(
+            count, normals, tangents, uv0, uv1, colors, 3 if color_kind == "VEC3" and color_index is not None else 4)
         self.uv_sets = frozenset(i for i in (0, 1) if "TEXCOORD_" + str(i) in attributes)
         self.triangles = array.array("I", (i for a, b, c in triangles for i in (a, c, b)))
         self.material = primitive.get("material", len(reader.document.get("materials", [])))
@@ -406,38 +425,27 @@ class DeformPrimitive:
         for target in targets:
             if set(target) - {"POSITION", "NORMAL", "TANGENT"}:
                 raise ValueError("Only position, normal, and tangent morph targets are supported.")
-            values = [reader.geometry(target[name], "VEC3") if name in target else ((0, 0, 0),) * self.count
-                for name in ("POSITION", "NORMAL", "TANGENT")]
-            if any(len(rows) != self.count for rows in values):
+            values = [reader.geometry(target[name], "VEC3", flat=True) if name in target
+                else array.array("f", bytes(count * 12)) for name in ("POSITION", "NORMAL", "TANGENT")]
+            if any(len(rows) != count * 3 for rows in values):
                 raise ValueError("Morph streams must match the base vertex count.")
             if "TANGENT" in target and "TANGENT" not in attributes:
                 raise ValueError("A tangent morph requires authored base tangents.")
-            self.targets.extend(itertools.chain.from_iterable(itertools.chain.from_iterable(zip(*values))))
-        self.joint_starts = array.array("I", [0])
-        self.joint_indices = array.array("I")
-        self.joint_weights = array.array("f")
+            self.targets.extend(renpy.gl2.assimp._interleave_targets(count, *values))
         sets = sorted(int(name[7:]) for name in attributes if name.startswith("JOINTS_"))
         if sets != list(range(len(sets))) or any("WEIGHTS_" + str(i) not in attributes for i in sets):
             raise ValueError("Skin attribute sets must be contiguous joint/weight pairs.")
         if any(name.startswith("WEIGHTS_") and "JOINTS_" + name[8:] not in attributes for name in attributes):
             raise ValueError("Skin attribute sets must be joint/weight pairs.")
-        streams = []
-        self.max_joint_index = -1
+        joints, weights = array.array("d"), array.array("d")
         for i in sets:
-            joints = reader.geometry(attributes["JOINTS_" + str(i)], "VEC4", (5121, 5123))
-            self.max_joint_index = max(self.max_joint_index, max(int(j) for row in joints for j in row))
-            weights = stream("WEIGHTS_" + str(i), "VEC4", (0, 0, 0, 0), True)
-            if len(joints) != self.count or any(not 0 <= w <= 1 for row in weights for w in row):
+            set_joints = reader.geometry(attributes["JOINTS_" + str(i)], "VEC4", (5121, 5123))
+            if len(set_joints) != count:
                 raise ValueError("Skin weights must be between zero and one and match the vertex count.")
-            streams.append((joints, weights))
-        for vertex in range(self.count):
-            influences = [(int(j), w) for joints, weights in streams for j, w in zip(joints[vertex], weights[vertex]) if w]
-            total = sum(w for j, w in influences)
-            if sets and not total:
-                raise ValueError("Every skinned vertex requires a nonzero joint weight.")
-            self.joint_indices.extend(j for j, w in influences)
-            self.joint_weights.extend(w / total for j, w in influences)
-            self.joint_starts.append(len(self.joint_indices))
+            joints.extend(itertools.chain.from_iterable(set_joints))
+            weights.extend(stream("WEIGHTS_" + str(i), "VEC4", (0, 0, 0, 0), True, "d"))
+        self.joint_starts, self.joint_indices, self.joint_weights, self.max_joint_index = (
+            renpy.gl2.assimp._pack_skin(count, len(sets), joints, weights))
 
 
 def sample(channel, time):
