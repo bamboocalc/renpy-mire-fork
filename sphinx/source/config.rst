@@ -1743,9 +1743,24 @@ Showing Images
     used inactive models are discarded until the retained data fits the budget.
 
     Models being shown or predicted are excluded from this budget. The size
-    counts native mesh buffers and compressed embedded images, rather than
-    Python object overhead. Decoded images and GPU textures use the separate
-    image cache controlled by :var:`config.image_cache_size_mb`.
+    counts native mesh buffers and compressed embedded images. Opt-in scene
+    imports also include an estimate of retained hierarchy and animation
+    metadata; other Python object overhead is excluded. Decoded images and GPU
+    textures use the separate image cache controlled by
+    :var:`config.image_cache_size_mb`.
+
+.. var:: config.gltf_shadow_cache_size_mb = 64
+
+    The renderer's retention budget, in megabytes, for unchanged desktop
+    ``GLTFScene`` shadow maps. Zero disables retention. The least recently
+    used maps are released when new maps exceed the budget. An atlas larger
+    than the budget uses uncached rendering.
+
+    Accounting includes RGBA8 color and depth storage for retained faces and
+    atlases. It excludes driver overhead and targets still referenced by
+    active render trees, so it does not limit total GPU or peak frame memory.
+    Texture resets discard the cache. A scene can disable reuse independently
+    with ``shadow_cache=False``.
 
 .. var:: config.texture_upload_chunk_size = 0
 

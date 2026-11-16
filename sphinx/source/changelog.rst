@@ -60,6 +60,76 @@ after a program has been encountered once.
 3D Model Loading
 ----------------
 
+Desktop scenes offer opt-in depth peeling for intersecting transparent
+surfaces, offscreen refraction margins, and two/four directional shadow
+cascades with stable texel grids and blended transitions. Colored shadow
+atlases carry glass tint, Fresnel and volume absorption through two surfaces.
+Bounded single-interface caustics move refracted flux to visible receivers
+with a finite brightness cap. See :doc:`model` for costs and limits.
+
+Scene-enabled glTF models support CPU linear-blend skinning, position/normal/
+tangent morph targets, and animated morph weights. Clip blending supports
+weighted poses and timed crossfades. Deformed geometry participates in bounds,
+shadows, materials, and refraction without storing native meshes in saves.
+
+Desktop PBR materials support specular weight/tint, clearcoat with independent
+normal maps, and Charlie sheen. Environment filtering has three quality levels
+and a bounded GPU cache. Up to two static box reflection probes provide local
+parallax correction and blend into the global environment. Imported glTF
+cameras support authored projections and animated camera rigs.
+
+``GLTFDepthOfField`` filters retained scene depth in HDR before tone mapping.
+The ``renpy.gltf.baked_srgb`` shader adapts existing baked color/depth-in-alpha
+shaders for composition with PBR glass. Texture staging tools create independent
+optimized asset copies, and disjoint smooth panes share refraction copies.
+
+``GLTFModel(..., scene=True)`` preserves named scene nodes and materials for
+per-instance transforms, visibility, and material overrides. Node translation,
+rotation, and scale animation support STEP, LINEAR, and CUBICSPLINE clips,
+with looping, reverse speed, fixed poses, and saved playback state. Scene
+diagnostics identify source objects and unsupported asset features. A desktop
+room benchmark compares opaque, shadowed, and refractive rendering. See
+:doc:`model` for the controls and current limits.
+
+Desktop scenes reuse unchanged shadow faces and atlases within a bounded
+renderer cache. Camera movement does not rebuild world-space shadows.
+Optional renderer instrumentation reports per-pass CPU submission and GPU
+timestamp intervals, draw counts, culling, and refraction copies. The room
+benchmark compares cached and uncached output and timings.
+
+Desktop PBR scenes support imported ``KHR_lights_punctual`` lights and
+script-created ``GLTFLight`` displayables, with directional, point, and spot
+lighting. Up to eight active lights share filtered depth-atlas shadows,
+with per-model casting and receiving controls. ``KHR_materials_transmission``,
+``KHR_materials_volume``, and ``KHR_materials_ior`` add layered glass,
+rough transmission, volume absorption, and screen-space refraction.
+Mobile and Web are unsupported. See :doc:`model` for units, cost, and limits.
+
+PBR scenes can load Radiance ``.hdr`` environment maps as linear half-float
+textures, preserving highlights through filtering and reflections. glTF
+materials support ``KHR_materials_emissive_strength``, with an independent
+multiplier that can be overridden on a model. Zero-roughness environment
+reflections retain their sharpness.
+
+``GLTFScene`` and the opt-in ``renpy.gltf.pbr`` shader add directional lighting,
+filtered environment reflections, metallic/roughness shading, normal maps,
+emission, and indirect occlusion. Scenes blend in linear HDR before exposure
+and tone mapping. The built-in unlit shader also supports this scene target.
+See :doc:`model` for setup, hardware requirements, and current limits.
+
+``GLTFModel(..., material=True)`` provides a built-in unlit material, standard
+material defaults, two UV sets, vertex colors, per-texture samplers, and
+``KHR_texture_transform`` support. Color textures use sRGB storage and data
+maps remain linear. Explicit uniform and texture overrides take precedence
+over imported material values. Existing custom shaders retain the legacy
+import path by default.
+
+GLTF models can opt into material alpha modes with ``material_alpha=True`` and
+a compatible shader. Opaque and cutout materials write depth, while blended
+meshes draw afterward in camera order without writing depth. Models under a
+shared ``gl_depth True`` camera share the transparent pass. See :doc:`model`
+for a shader example and the limits of sorting transparent meshes.
+
 GLTF models can opt into camera visibility culling with ``frustum_cull=True``.
 The optional :var:`config.texture_upload_chunk_size` divides predicted opaque
 and premultiplied texture uploads into cooperative steps. Both options retain
