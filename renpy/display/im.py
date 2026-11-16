@@ -43,6 +43,8 @@ type Surface = renpy.pygame.Surface
 
 # This is an entry in the image cache.
 class CacheEntry:
+    hdr_texture_size = None
+
     def __init__(self, what: "ImageBase", surf: Surface, bounds: tuple[int, int, int, int]):
         # The object that is being cached (which needs to be
         # hashable and comparable).
@@ -65,10 +67,19 @@ class CacheEntry:
         # The time when this cache entry was last used.
         self.time = 0
 
-        # The bytes of block-compressed texture data, or None for a surface.
+        # The bytes of GPU-ready pixel/block data, or None for a surface.
         self.compressed_size: int | None = getattr(surf, "compressed_size", None)
+        if isinstance(surf, HDRImage):
+            mipmap = what.mipmap
+            if mipmap is None:
+                mipmap = renpy.config.mipmap
+            if mipmap == "auto":
+                mipmap = renpy.display.draw.auto_mipmap
+            self.hdr_texture_size = surf.get_texture_size(mipmap)
 
     def size(self) -> int:
+        if self.hdr_texture_size is not None:
+            return (self.hdr_texture_size + (self.compressed_size if renpy.config.cache_surfaces else 0)) // 4
         if self.compressed_size is not None:
             # The cache counts four-byte pixels.
             return self.compressed_size * (2 if renpy.config.cache_surfaces else 1) // 4
@@ -473,6 +484,9 @@ class Cache:
                 if not image.premultiply:
                     properties["premultiplied"] = True
 
+                if image.srgb:
+                    properties["srgb"] = True
+
                 if image.mipmap is not None:
                     properties["mipmap"] = image.mipmap
 
@@ -831,6 +845,8 @@ class ImageBase(renpy.display.displayable.Displayable):
 
     # True if the image should be premultiplied, False otherwise.
     premultiply = True
+    srgb = False
+    texture_sampler = None
 
     def after_upgrade(self, version):
         if version < 1:
@@ -845,6 +861,11 @@ class ImageBase(renpy.display.displayable.Displayable):
         self.oversample = properties.pop("oversample", None)
         self.mipmap = properties.pop("mipmap", None)
         self.premultiply = properties.pop("premultiply", True)
+        self.srgb = properties.pop("srgb", False)
+        self.texture_sampler = properties.pop("texture_sampler", None)
+
+        if self.srgb and self.premultiply:
+            raise ValueError("sRGB textures require premultiply=False.")
 
         if self.oversample is not None and self.oversample <= 0:
             raise Exception("Image's oversample parameter must be greater than 0.")
@@ -1184,15 +1205,17 @@ class Null(ImageBase):
     color = (0, 0, 0, 0)
 
     def __init__(self, color=(0, 0, 0, 0), **properties):
-        super().__init__(**properties)
-
-        self.const_size = True
-
         r, g, b, a = renpy.color.Color(color)
         self.color: tuple[int, int, int, int] = (r, g, b, a)
+        super().__init__(self.color, **properties)
+        self.const_size = True
+
+    def after_setstate(self):
+        if len(self.identity) == 1 or self.identity[1] != self.color:
+            self.identity = (self.identity[0], self.color) + self.identity[1:]
 
     def get_hash(self):
-        return 42
+        return hash(self.color)
 
     def load(self):
         rv = renpy.display.pgrender.surface((1, 1), True)
@@ -1214,6 +1237,17 @@ class UnoptimizedTexture(ImageBase):
         If False, alpha premultiplication is not applied when the image is loaded as a texture, so the
         color channels reach the shader unchanged. This is useful for textures that contain data, like
         normal maps, where the color channels should not be scaled by alpha.
+
+    `srgb`
+        If True, stores the texture as sRGB, so the GPU decodes RGB to linear
+        values before filtering and sampling. Alpha remains linear. This requires
+        ``premultiply=False`` and sRGB texture support. The default False preserves
+        the existing texture interpretation.
+
+    Radiance ``.hdr`` files load as linear half-float textures when both
+    ``premultiply`` and ``srgb`` are False. Their RGB values are preserved up
+    to 65504; brighter inputs raise an error. These textures can be used as
+    ``GLTFScene`` environments and do not support surface-based manipulators.
     """
 
     obsolete = False
@@ -1228,10 +1262,19 @@ class UnoptimizedTexture(ImageBase):
     def _repr_info(self):
         return repr(self.image)
 
+    def after_setstate(self):
+        self.identity = (self.identity[0], self.image.identity) + self.identity[2:]
+
     def get_hash(self):
         return self.image.get_hash()
 
     def load(self):
+        if isinstance(self.image, Image) and self.image.filename.lower().endswith(".hdr"):
+            if self.premultiply or self.srgb:
+                raise ValueError("Radiance HDR textures require premultiply=False and srgb=False.")
+            with renpy.loader.load(self.image.filename, directory="images") as f:
+                return load_radiance(f.read(), self.image.filename)
+
         if renpy.config.compressed_textures and isinstance(self.image, Image):
             rv = load_compressed_texture(self.image.filename, self.premultiply)
 
@@ -1277,6 +1320,76 @@ class CompressedImage:
 
     def get_size(self) -> tuple[int, int]:
         return (self.width, self.height)
+
+
+class HDRImage(CompressedImage):
+    """Linear RGBA16F pixels, using the same cache and deferred-upload path as GPU-ready KTX2 data."""
+
+    def __init__(self, data: bytes, width: int, height: int):
+        super().__init__(data, 97, width, height, [(0, len(data))], False)
+
+    def get_texture_size(self, mipmap: bool) -> int:
+        """Count the uploaded half-float pixels, including the mip levels the GPU will generate."""
+        width, height = self.width, self.height
+        size = width * height * 8
+        if mipmap:
+            for _ in range(renpy.config.max_mipmap_level):
+                if width == height == 1:
+                    break
+                width, height = max(width // 2, 1), max(height // 2, 1)
+                size += width * height * 8
+        return size
+
+
+def load_radiance(data: bytes, filename: str) -> HDRImage:
+    """Decode Radiance RGBE scanlines to linear half floats, normalizing the file's axis order and orientation."""
+    stream = io.BytesIO(data)
+
+    def invalid(reason):
+        raise ValueError(f"Invalid Radiance HDR image {filename!r}: {reason}.")
+
+    if stream.readline().strip() not in (b"#?RADIANCE", b"#?RGBE"):
+        invalid("missing Radiance signature")
+    format_found = False
+    while True:
+        line = stream.readline()
+        if not line:
+            invalid("truncated header")
+        line = line.strip()
+        if not line:
+            break
+        if line.startswith(b"FORMAT="):
+            if line != b"FORMAT=32-bit_rle_rgbe":
+                invalid("only RGBE encoding is supported")
+            format_found = True
+    if not format_found:
+        invalid("missing RGBE format")
+    resolution = stream.readline().split()
+    if (len(resolution) != 4 or resolution[0] not in (b"-Y", b"+Y", b"-X", b"+X")
+            or resolution[2] not in (b"-Y", b"+Y", b"-X", b"+X") or resolution[0][1:] == resolution[2][1:]):
+        invalid("invalid resolution axes")
+    try:
+        major, minor = int(resolution[1]), int(resolution[3])
+    except ValueError:
+        invalid("invalid resolution dimensions")
+    # Bound allocation before trusting the dimensions of a compressed scanline stream.
+    if min(major, minor) <= 0 or max(major, minor) > 32767 or major * minor > 64 * 1024 * 1024:
+        invalid("resolution exceeds the supported dimensions")
+    y_first = resolution[0][1:] == b"Y"
+    width, height = (minor, major) if y_first else (major, minor)
+    loader = getattr(renpy.display.draw, "texture_loader", None)
+    if (isinstance(loader, renpy.gl2.gl2texture.TextureLoader)
+            and (width > loader.max_texture_width or height > loader.max_texture_height)):
+        invalid("resolution exceeds the renderer's maximum texture dimensions")
+    if len(data) - stream.tell() < major * 4:
+        invalid("truncated pixel data")
+    x_axis = resolution[2] if y_first else resolution[0]
+    y_axis = resolution[0] if y_first else resolution[2]
+    pixels, reason = renpy.display.accelerator.decode_radiance(
+        data, stream.tell(), major, minor, y_first, x_axis == b"-X", y_axis == b"+Y")
+    if reason is not None:
+        invalid(reason)
+    return HDRImage(pixels, width, height)
 
 
 def load_ktx2(data: bytes, filename: str) -> CompressedImage:

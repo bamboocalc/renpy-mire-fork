@@ -109,6 +109,17 @@ cdef class TextureLoader:
         glGetFloatv(MAX_TEXTURE_MAX_ANISOTROPY_EXT, &self.max_anisotropy)
 
         extensions = self.draw.gl_extensions or set()
+        version = self.draw.info.get("gpu_driver_version", "0.0").removeprefix("OpenGL ES ").split()[0]
+        try:
+            major, minor = map(int, version.split(".")[:2])
+        except ValueError:
+            major, minor = 0, 0
+        # OpenGL ES 2.0 has no sized sRGB internal format.
+        self.srgb_textures = ((major, minor) >= (3, 0) if self.draw.gles
+            else "GL_EXT_texture_sRGB" in extensions or (major, minor) >= (2, 1))
+        self.hdr_targets = ((not self.draw.gles and (major, minor) >= (3, 0)) or
+            (self.draw.gles and (major, minor) >= (3, 2)) or
+            bool({"GL_EXT_color_buffer_float", "GL_EXT_color_buffer_half_float"} & extensions))
         bptc = { "GL_ARB_texture_compression_bptc", "GL_EXT_texture_compression_bptc" } & extensions
 
         if bptc and not renpy.uguu.gl.check_missing_functions(("glCompressedTexImage2D",)):
@@ -407,7 +418,15 @@ cdef class GLTexture(GL2Model):
 
         self.compressed = image
         self.properties = dict(properties)
-        self.properties["mipmap"] = self.should_have_mipmaps(properties) and len(image.levels) > 1
+        is_hdr = isinstance(image, renpy.display.im.HDRImage)
+        if is_hdr:
+            if not self.loader.hdr_targets:
+                raise RuntimeError("Radiance HDR textures require half-float texture support on this renderer.")
+            if properties.get("srgb", False):
+                raise ValueError("Radiance HDR pixels are linear and cannot use sRGB storage.")
+            if image.width > self.loader.max_texture_width or image.height > self.loader.max_texture_height:
+                raise ValueError("Radiance HDR image exceeds the renderer's maximum texture dimensions.")
+        self.properties["mipmap"] = self.should_have_mipmaps(properties) and (is_hdr or len(image.levels) > 1)
         self.properties["compressed_size"] = 0
 
         self.mesh = Mesh2.texture_rectangle(
@@ -436,7 +455,10 @@ cdef class GLTexture(GL2Model):
 
         image = self.compressed
         data = image.data
-        internal_format = COMPRESSED_FORMATS[image.vk_format]
+        is_hdr = isinstance(image, renpy.display.im.HDRImage)
+        internal_format = GL_RGBA16F if is_hdr else COMPRESSED_FORMATS[image.vk_format]
+        if not is_hdr and self.properties.get("srgb", False):
+            internal_format = 0x8E8D # GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM
 
         max_level = min(len(image.levels) - 1, renpy.config.max_mipmap_level) if self.has_mipmaps() else 0
 
@@ -463,7 +485,13 @@ cdef class GLTexture(GL2Model):
 
         for level in range(max_level + 1):
             offset, length = image.levels[level]
-            glCompressedTexImage2D(GL_TEXTURE_2D, level, internal_format, width, height, 0, length, <const void *> (data + offset))
+            if is_hdr:
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, 0)
+                glTexImage2D(GL_TEXTURE_2D, level, internal_format, width, height, 0,
+                    GL_RGBA, GL_HALF_FLOAT, <const void *> (data + offset))
+            else:
+                glCompressedTexImage2D(GL_TEXTURE_2D, level, internal_format, width, height, 0,
+                    length, <const void *> (data + offset))
             uploaded += length
 
             width = max(width >> 1, 1)
@@ -472,6 +500,13 @@ cdef class GLTexture(GL2Model):
         self.texture_width = image.width
         self.texture_height = image.height
 
+        if is_hdr:
+            self.mipmap_texture(number, image.width, image.height, self.properties)
+            if self.has_mipmaps():
+                self.min_filter = GL_LINEAR_MIPMAP_NEAREST
+                self.default_min_filter = self.min_filter
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, self.min_filter)
+            uploaded = image.get_texture_size(self.has_mipmaps())
         self.properties["compressed_size"] = uploaded
         self.loader.total_texture_size += uploaded
 
@@ -542,7 +577,11 @@ cdef class GLTexture(GL2Model):
         self.properties = {
             "mipmap" : self.should_have_mipmaps(properties),
             "pixel_perfect" : properties.get("pixel_perfect", False),
+            "hdr" : properties.get("hdr", False),
             }
+
+        if self.properties["hdr"] and not self.loader.hdr_targets:
+            raise RuntimeError("GLTFScene requires renderable half-float HDR textures on this renderer.")
 
         cw, ch = size = what.get_size()
 
@@ -593,31 +632,38 @@ cdef class GLTexture(GL2Model):
         self.allocate_texture(premultiplied, tw, th, properties)
 
         depth_texture = None
+        complete = False
+        try:
+            if self.properties["hdr"]:
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, premultiplied, 0)
+                if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
+                    raise RuntimeError("GLTFScene could not create a half-float HDR framebuffer.")
+            if properties.get("depth_texture", False):
+                depth_texture = self.attach_depth_texture(tw, th)
+                if depth_texture is None and properties.get("gltf_depth_required", False):
+                    raise RuntimeError("GLTFScene shadows and refraction require a renderable depth texture.")
 
-        if properties.get("depth_texture", False):
-            depth_texture = self.attach_depth_texture(tw, th)
+            glViewport(0, 0, tw, th)
+            glClearColor(0.0, 0.0, 0.0, 0.0)
+            clear_color_buffer(0, 0, tw, th)
+            if depth_texture is not None:
+                glClear(GL_DEPTH_BUFFER_BIT)
+            glEnable(GL_BLEND)
+            renpy.gl2.gl2draw.draw_render(what, tw, th, transform, draw.state_cache, invert_front_face=True)
 
-        # Set up the viewport.
-        glViewport(0, 0, tw, th)
-
-        # Clear the screen.
-        glClearColor(0.0, 0.0, 0.0, 0.0)
-        clear_color_buffer(0, 0, tw, th)
-
-        if depth_texture is not None:
-            glClear(GL_DEPTH_BUFFER_BIT)
-
-        # Set up the default modes.
-        glEnable(GL_BLEND)
-
-        renpy.gl2.gl2draw.draw_render(what, tw, th, transform, draw.state_cache, invert_front_face=True)
-
-        glBindTexture(GL_TEXTURE_2D, premultiplied)
-        glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, tw, th, 0)
-
-        if depth_texture is not None:
-            self.detach_depth_texture()
+            glBindTexture(GL_TEXTURE_2D, premultiplied)
+            if not self.properties["hdr"]:
+                glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, tw, th, 0)
             self.depth_texture = depth_texture
+            complete = True
+        finally:
+            if depth_texture is not None:
+                self.detach_depth_texture()
+            if self.properties["hdr"]:
+                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, draw.color_renderbuffer)
+            if not complete:
+                glDeleteTextures(1, &premultiplied)
+                self.loader.total_texture_size -= self.properties.get("allocated_size", 0)
 
         self.mipmap_texture(premultiplied, tw, th, properties)
 
@@ -626,6 +672,26 @@ cdef class GLTexture(GL2Model):
 
         self.loaded = True
 
+        publication = (what.properties or {}).get("gltf_target_store", (what.properties or {}).get("gltf_shadow_store"))
+        if publication is not None:
+            publication[0].store(publication[1], self)
+
+
+    def capture_framebuffer(GLTexture self, mipmap=True):
+        """Refresh the private refraction scratch texture from the current HDR scene, including its depth."""
+        cdef GLint viewport[4]
+        cdef GLTexture depth = self.depth_texture
+        glGetIntegerv(GL_VIEWPORT, viewport)
+        if viewport[2] != self.texture_width or viewport[3] != self.texture_height or depth is None:
+            raise RuntimeError("The refraction scratch target must match the scene's drawable resolution and depth.")
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, self.number)
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, viewport[0], viewport[1], viewport[2], viewport[3])
+        if mipmap:
+            self.mipmap_texture(self.number, self.texture_width, self.texture_height, self.properties)
+        glBindTexture(GL_TEXTURE_2D, depth.number)
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, viewport[0], viewport[1], viewport[2], viewport[3])
+        self.loader.draw.state_cache.reset()
 
     def attach_depth_texture(GLTexture self, int tw, int th):
         """
@@ -648,14 +714,14 @@ cdef class GLTexture(GL2Model):
         rv.loaded = True
         rv.texture_width = tw
         rv.texture_height = th
-        rv.properties = { "mipmap" : False }
+        rv.properties = { "mipmap" : False, "allocated_size": tw * th * 4 }
         rv.mesh = self.mesh
 
         # Depth formats aren't filterable on OpenGL ES 3.
         rv.mag_filter = rv.min_filter = rv.default_mag_filter = rv.default_min_filter = GL_NEAREST
 
         self.loader.allocated.add(number)
-        self.loader.total_texture_size += self.width * self.height * 4
+        self.loader.total_texture_size += tw * th * 4
 
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, number, 0)
 
@@ -779,6 +845,7 @@ cdef class GLTexture(GL2Model):
         cdef int rows
         cdef Py_ssize_t chunk_size = max(0, renpy.config.texture_upload_chunk_size)
         cdef unsigned char *pixels
+        cdef GLint internal_format = GL_SRGB8_ALPHA8 if self.properties.get("srgb", False) else GL_RGBA
 
         if self.loaded:
             return
@@ -850,13 +917,15 @@ cdef class GLTexture(GL2Model):
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixel_buffer)
             glBufferData(GL_PIXEL_UNPACK_BUFFER, s.h * s.pitch, s.pixels, GL_STREAM_DRAW)
             glPixelStorei(GL_UNPACK_ROW_LENGTH, s.pitch // 4)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.width, self.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, <void *> 0)
+            glTexImage2D(GL_TEXTURE_2D, 0, internal_format, self.width, self.height, 0,
+                GL_RGBA, GL_UNSIGNED_BYTE, <void *> 0)
             glDeleteBuffers(1, &pixel_buffer)
 
         else:
 
             glPixelStorei(GL_UNPACK_ROW_LENGTH, s.pitch // 4)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, self.width, self.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, s.pixels)
+            glTexImage2D(GL_TEXTURE_2D, 0, internal_format, self.width, self.height, 0,
+                GL_RGBA, GL_UNSIGNED_BYTE, s.pixels)
 
         self.mipmap_texture(premultiplied, self.width, self.height, self.properties)
 
@@ -880,10 +949,11 @@ cdef class GLTexture(GL2Model):
         # Going from a single to multiple mipmap levels takes ~9ms when loading
         # each mipmap, while allocating the space first reduces that to ~1ms.
 
+        texture_size = tw * th * (8 if properties.get("hdr", False) else 4)
         if self.has_mipmaps():
-            self.loader.total_texture_size += int(self.width * self.height * 4 * 1.34)
-        else:
-            self.loader.total_texture_size += int(self.width * self.height * 4)
+            texture_size = int(texture_size * 1.34)
+        self.loader.total_texture_size += texture_size
+        self.properties["allocated_size"] = texture_size
 
         glBindTexture(GL_TEXTURE_2D, tex)
 
@@ -916,10 +986,15 @@ cdef class GLTexture(GL2Model):
         self.texture_height = th
 
         cdef GLuint level = 0
+        cdef GLint internal_format = GL_SRGB8_ALPHA8 if properties.get("srgb", False) else GL_RGBA
+        cdef GLenum data_type = GL_UNSIGNED_BYTE
+        if properties.get("hdr", False):
+            internal_format = GL_RGBA16F
+            data_type = GL_HALF_FLOAT
 
         while True:
 
-            glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA, tw, th, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL)
+            glTexImage2D(GL_TEXTURE_2D, level, internal_format, tw, th, 0, GL_RGBA, data_type, NULL)
 
             if tw == 1 and th == 1:
                 break
@@ -976,7 +1051,12 @@ cdef class GLTexture(GL2Model):
             return
 
         self.properties["mipmap"] = True
-        self.loader.total_texture_size += int(self.width * self.height * 4 * .34)
+        texture_size = (self.texture_width * self.texture_height * 8 if self.properties.get("hdr", False)
+            else self.width * self.height * 4)
+        extra_size = int(texture_size * .34)
+        self.loader.total_texture_size += extra_size
+        if "allocated_size" in self.properties:
+            self.properties["allocated_size"] += extra_size
 
         # This leaves the texture selected.
         self.mipmap_texture(self.number, self.width, self.height, self.properties)
@@ -992,6 +1072,8 @@ cdef class GLTexture(GL2Model):
 
                 if "compressed_size" in self.properties:
                     self.loader.total_texture_size -= self.properties["compressed_size"]
+                elif "allocated_size" in self.properties:
+                    self.loader.total_texture_size -= self.properties["allocated_size"]
                 elif self.properties.get("movie_yuv", False):
                     texture_size = self.width * self.height * self.properties["movie_yuv_components"]
                     if self.has_mipmaps():
@@ -1009,6 +1091,9 @@ cdef class GLTexture(GL2Model):
         # Render targets are loaded, and have no surface.
         if self.loaded:
             return
+
+        if self.properties.get("srgb", False) and not self.loader.srgb_textures:
+            raise RuntimeError("sRGB textures require OpenGL 2.1, GL_EXT_texture_sRGB, or OpenGL ES 3.0.")
 
         started = time.perf_counter() if renpy.config.debug_image_cache else 0.0
         try:

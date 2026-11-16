@@ -55,6 +55,9 @@ cdef class TextureLoader:
     # The KTX2 Vulkan format numbers this GPU can upload, as a set.
     cdef public object compressed_formats
 
+    cdef bint srgb_textures
+    cdef bint hdr_targets
+
     cdef public dict upload_stats
 
 

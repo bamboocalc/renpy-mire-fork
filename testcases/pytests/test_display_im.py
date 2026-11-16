@@ -1,3 +1,4 @@
+import pickle
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -186,17 +187,18 @@ def test_cached_prediction_is_reused_for_rendering(cache, draw):
 
 
 @pytest.mark.parametrize(
-    ("premultiply", "mipmap", "properties"),
+    ("premultiply", "mipmap", "srgb", "properties"),
     [
-        (True, None, {}),
-        (False, None, {"premultiplied": True}),
-        (True, False, {"mipmap": False}),
-        (False, True, {"premultiplied": True, "mipmap": True}),
+        (True, None, False, {}),
+        (False, None, False, {"premultiplied": True}),
+        (True, False, False, {"mipmap": False}),
+        (False, True, False, {"premultiplied": True, "mipmap": True}),
+        (False, True, True, {"premultiplied": True, "mipmap": True, "srgb": True}),
     ],
-    ids=["default", "no-premultiply", "mipmap-false", "both"],
+    ids=["default", "no-premultiply", "mipmap-false", "both", "srgb"],
 )
 @pytest.mark.parametrize("raw", [False, True], ids=["image", "raw-texture"])
-def test_texture_load_properties(cache, draw, raw, premultiply, mipmap, properties):
+def test_texture_load_properties(cache, draw, raw, premultiply, mipmap, srgb, properties):
     """
     Loading an image as a texture passes premultiply and mipmap to load_texture as texture properties.
 
@@ -206,12 +208,47 @@ def test_texture_load_properties(cache, draw, raw, premultiply, mipmap, properti
     """
 
     if raw:
-        image = im.UnoptimizedTexture(im.Null(), premultiply=premultiply, mipmap=mipmap)
+        image = im.UnoptimizedTexture(im.Null(), premultiply=premultiply, mipmap=mipmap, srgb=srgb)
     else:
-        image = im.Null(premultiply=premultiply, mipmap=mipmap)
+        image = im.Null(premultiply=premultiply, mipmap=mipmap, srgb=srgb)
 
     cache.get(image, texture=True)
     assert draw.load_texture.call_args.kwargs == {"properties": properties}
+
+
+def test_color_space_and_sampler_keep_separate_textures(cache):
+    """One image can serve as color or data, or use different samplers, without reusing incompatible GPU storage."""
+    image = im.Null()
+    raw = im.UnoptimizedTexture(image, premultiply=False)
+    color = im.UnoptimizedTexture(image, premultiply=False, srgb=True)
+    sampled = im.UnoptimizedTexture(image, premultiply=False, texture_sampler=(10497, 10497, 9728, 9728))
+    raw_texture = cache.get(raw, texture=True)
+    color_texture = cache.get(color, texture=True)
+    sampled_texture = cache.get(sampled, texture=True)
+    assert color_texture is not raw_texture
+    assert sampled_texture is not raw_texture
+    assert cache.get(color, texture=True) is color_texture
+
+
+def test_srgb_requires_straight_alpha():
+    """Premultiplying encoded color before sRGB decoding would corrupt both filtering and material calculations."""
+    with pytest.raises(ValueError, match="premultiply=False"):
+        im.UnoptimizedTexture(im.Null(), srgb=True)
+
+
+@pytest.mark.parametrize("old_save", [False, True], ids=["new-images", "old-save"])
+def test_constant_texture_colors_do_not_collide(cache, old_save):
+    """Different constant colors, including pre-color-identity saves, retain their own pixel data in the cache."""
+    images = [im.Null("#fff"), im.Null("#808080")]
+    if old_save:
+        for image in images:
+            image.identity = ("Null",)
+    textures = [im.UnoptimizedTexture(image, premultiply=False) for image in images]
+    if old_save:
+        textures = pickle.loads(pickle.dumps(textures))
+    white, gray = [cache.get(texture, texture=True) for texture in textures]
+    assert white.get_at((0, 0)) == (255, 255, 255, 255)
+    assert gray.get_at((0, 0)) == (128, 128, 128, 255)
 
 
 def test_premultiply_setting_gets_separate_cache_entry(cache, draw):

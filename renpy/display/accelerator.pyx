@@ -33,6 +33,219 @@ from renpy.display.core import absolute
 from renpy.pygame.sdl cimport *
 from renpy.pygame.surface cimport Surface
 
+from libc.stdlib cimport malloc, free
+from libc.string cimport memcpy
+from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING
+
+################################################################################
+# Radiance HDR decoding
+################################################################################
+
+RADIANCE_ERRORS = (None, "truncated pixel data", "scanline width does not match the resolution",
+    "invalid scanline run", "invalid legacy scanline run",
+    "RGB exceeds half-float range; reduce the source image's exposure")
+
+
+cdef inline bint rgbe_half(unsigned int mantissa, int exponent, unsigned short *half) noexcept nogil:
+    """
+    Stores mantissa * 2 ** exponent as a half float, rounding subnormals to
+    nearest even. Returns True when the value exceeds 65504.
+    """
+
+    cdef int length = 0
+    cdef int biased, shift
+    cdef unsigned int quotient, remainder, midpoint
+
+    if mantissa == 0:
+        half[0] = 0
+        return False
+
+    while mantissa >> length:
+        length += 1
+
+    biased = length - 1 + exponent + 15
+
+    if biased > 30:
+        return True
+
+    # Eight mantissa bits always fit the eleven-bit normal significand exactly.
+    if biased > 0:
+        half[0] = <unsigned short> ((biased << 10) | ((mantissa << (11 - length)) & 0x3ff))
+        return False
+
+    shift = -(exponent + 24)
+
+    if shift <= 0:
+        half[0] = <unsigned short> (mantissa << -shift)
+    elif shift > 8:
+        half[0] = 0
+    else:
+        quotient = mantissa >> shift
+        remainder = mantissa & ((1u << shift) - 1)
+        midpoint = 1u << (shift - 1)
+        if remainder > midpoint or (remainder == midpoint and (quotient & 1)):
+            quotient += 1
+        half[0] = <unsigned short> quotient
+
+    return False
+
+
+cdef int decode_radiance_rows(
+        const unsigned char *data, Py_ssize_t size, Py_ssize_t position,
+        int major, int minor, Py_ssize_t width, Py_ssize_t height,
+        bint y_first, bint flip_x, bint flip_y,
+        unsigned char *scanline, unsigned char *out) noexcept nogil:
+    """
+    Returns 0 on success, or an index into RADIANCE_ERRORS.
+    """
+
+    cdef const unsigned char *first
+    cdef const unsigned char *pixel
+    cdef const unsigned char *previous
+    cdef int row, column, channel, code, count, shift, i
+    cdef Py_ssize_t filled, run, j, x, y, index
+    cdef unsigned short rgb[3]
+
+    for row in range(major):
+        if size - position < 4:
+            return 1
+
+        first = data + position
+        position += 4
+
+        if 8 <= minor <= 32767 and first[0] == 2 and first[1] == 2 and first[2] < 128:
+            if first[2] * 256 + first[3] != minor:
+                return 2
+
+            for channel in range(4):
+                filled = 0
+
+                while filled < minor:
+                    if position >= size:
+                        return 1
+
+                    code = data[position]
+                    position += 1
+                    count = code - 128 if code > 128 else code
+
+                    if count == 0 or filled + count > minor:
+                        return 3
+
+                    if code > 128:
+                        if position >= size:
+                            return 1
+                        for i in range(count):
+                            scanline[(filled + i) * 4 + channel] = data[position]
+                        position += 1
+                    else:
+                        if size - position < count:
+                            return 1
+                        for i in range(count):
+                            scanline[(filled + i) * 4 + channel] = data[position + i]
+                        position += count
+
+                    filled += count
+
+        else:
+            filled = 0
+            previous = NULL
+            shift = 0
+            pixel = first
+
+            while filled < minor:
+                if pixel[0] == 1 and pixel[1] == 1 and pixel[2] == 1:
+                    if previous == NULL or shift > 24:
+                        return 4
+
+                    run = (<Py_ssize_t> pixel[3]) << shift
+
+                    if run > minor - filled:
+                        return 4
+
+                    for j in range(run):
+                        memcpy(scanline + (filled + j) * 4, previous, 4)
+
+                    filled += run
+                    shift += 8
+
+                else:
+                    memcpy(scanline + filled * 4, pixel, 4)
+                    previous = pixel
+                    filled += 1
+                    shift = 0
+
+                if filled < minor:
+                    if size - position < 4:
+                        return 1
+                    pixel = data + position
+                    position += 4
+
+        for column in range(minor):
+            pixel = scanline + column * 4
+
+            if pixel[3] == 0:
+                rgb[0] = rgb[1] = rgb[2] = 0
+            else:
+                for i in range(3):
+                    if rgbe_half(pixel[i], pixel[3] - 136, &rgb[i]):
+                        return 5
+
+            x = column if y_first else row
+            y = row if y_first else column
+
+            if flip_x:
+                x = width - 1 - x
+            if flip_y:
+                y = height - 1 - y
+
+            index = (y * width + x) * 8
+
+            for i in range(3):
+                out[index + i * 2] = rgb[i] & 0xff
+                out[index + i * 2 + 1] = rgb[i] >> 8
+
+            # 0x3c00 is half-float 1.0.
+            out[index + 6] = 0x00
+            out[index + 7] = 0x3c
+
+    return 0
+
+
+def decode_radiance(bytes data, Py_ssize_t offset, int major, int minor,
+                    bint y_first, bint flip_x, bint flip_y):
+    """
+    Decodes validated-size Radiance RGBE scanlines starting at `offset` into
+    little-endian RGBA half floats, without holding the GIL. Returns
+    (pixels, None), or (None, reason) when the pixel data is invalid.
+    """
+
+    cdef Py_ssize_t width = minor if y_first else major
+    cdef Py_ssize_t height = major if y_first else minor
+    cdef Py_ssize_t size = len(data)
+    cdef const unsigned char *source = <const unsigned char *> data
+    cdef unsigned char *scanline
+    cdef unsigned char *out
+    cdef int error
+
+    rv = PyBytes_FromStringAndSize(NULL, width * height * 8)
+    out = <unsigned char *> PyBytes_AS_STRING(rv)
+
+    scanline = <unsigned char *> malloc(minor * 4)
+    if scanline == NULL:
+        raise MemoryError()
+
+    try:
+        with nogil:
+            error = decode_radiance_rows(source, size, offset, major, minor, width, height,
+                y_first, flip_x, flip_y, scanline, out)
+    finally:
+        free(scanline)
+
+    if error:
+        return None, RADIANCE_ERRORS[error]
+
+    return rv, None
+
 ################################################################################
 # Surface copying
 ################################################################################
