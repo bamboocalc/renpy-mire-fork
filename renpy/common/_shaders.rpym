@@ -62,6 +62,1105 @@ init python:
         fragment_color = texture(tex0, v_tex_coord, u_lod_bias);
     """)
 
+    renpy.register_shader("renpy.gltf.unlit", glsl=300, variables="""
+        uniform sampler2D u_tex_base_color;
+        uniform vec4 u_color_base;
+        uniform float u_material_base_color_texcoord;
+        uniform vec3 u_material_base_color_uv0;
+        uniform vec3 u_material_base_color_uv1;
+        uniform float u_material_gltf_alphamode;
+        uniform float u_material_gltf_alphacutoff;
+        uniform float u_gltf_linear;
+        in vec2 a_tex_coord;
+        in vec2 a_tex_coord1;
+        in vec4 a_color;
+        out vec2 v__uv;
+        out vec4 v__color;
+    """, vertex_200="""
+        vec3 uv = vec3(mix(a_tex_coord, a_tex_coord1, u_material_base_color_texcoord), 1.0);
+        v__uv = vec2(dot(u_material_base_color_uv0, uv), dot(u_material_base_color_uv1, uv));
+        v__color = clamp(a_color, 0.0, 1.0);
+    """, fragment_200="""
+        vec4 base = texture(u_tex_base_color, v__uv) * u_color_base * v__color;
+        if (u_material_gltf_alphamode < 0.5) {
+            base.a = 1.0;
+        } else if (u_material_gltf_alphamode < 1.5) {
+            if (base.a < u_material_gltf_alphacutoff) {
+                discard;
+            }
+            base.a = 1.0;
+        }
+        vec3 linear_rgb = max(base.rgb, vec3(0.0));
+        vec3 srgb = mix(12.92 * linear_rgb,
+            1.055 * pow(linear_rgb, vec3(1.0 / 2.4)) - 0.055,
+            step(vec3(0.0031308), linear_rgb));
+        fragment_color = vec4(mix(srgb, linear_rgb, u_gltf_linear) * base.a, base.a);
+    """)
+
+    # GGX/Smith/Schlick and split-sum IBL: https://google.github.io/filament/Filament.md.html
+    _gltf_brdf_functions = """
+        float l__visibility(float nv, float nl, float a) {
+            float aa = a * a;
+            float gv = nl * sqrt(aa + (1.0 - aa) * nv * nv);
+            float gl = nv * sqrt(aa + (1.0 - aa) * nl * nl);
+            return 0.5 / max(gv + gl, 0.000001);
+        }
+        vec3 l__fresnel(float vh, vec3 f0, float f90) {
+            return mix(f0, vec3(f90), pow(1.0 - vh, 5.0));
+        }
+        vec2 l__sphere_uv(vec3 d) {
+            float longitude = dot(d.xz, d.xz) > 0.000000000001 ? atan(d.z, d.x) : 0.0;
+            return vec2(longitude / 6.28318530718 + 0.5, acos(clamp(-d.y, -1.0, 1.0)) / 3.14159265359);
+        }
+        float gltf_cloth_curve(float cosine, float alpha) {
+            float blend = (1.0 - alpha) * (1.0 - alpha);
+            vec4 c = mix(vec4(21.5473, 3.82987, 0.19823, -1.97760),
+                vec4(25.3245, 3.32435, 0.16801, -1.27393), blend);
+            return c.x / (1.0 + c.y * pow(max(cosine, 0.0), c.z)) + c.w * cosine
+                + mix(-4.32054, -4.85967, blend);
+        }
+        float gltf_cloth_lambda(float cosine, float alpha) {
+            float exponent = cosine < 0.5 ? gltf_cloth_curve(cosine, alpha)
+                : 2.0 * gltf_cloth_curve(0.5, alpha) - gltf_cloth_curve(1.0 - cosine, alpha);
+            return exp(exponent);
+        }
+        float gltf_sheen_brdf(float nv, float nl, float nh, float roughness) {
+            float alpha = max(roughness * roughness, 0.0001);
+            float distribution = (2.0 + 1.0 / alpha) * pow(max(1.0 - nh * nh, 0.0), 0.5 / alpha)
+                / 6.28318530718;
+            float visibility = 1.0 / max(4.0 * nv * nl *
+                (1.0 + gltf_cloth_lambda(nv, alpha) + gltf_cloth_lambda(nl, alpha)), 0.000001);
+            return distribution * visibility;
+        }
+    """
+
+    _gltf_specular_variables = """
+        uniform float u_material_specular_factor;
+        uniform vec3 u_material_specular_color_factor;
+        uniform sampler2D u_tex_specular;
+        uniform sampler2D u_tex_specular_color;
+        uniform float u_material_specular_texcoord;
+        uniform vec3 u_material_specular_uv0;
+        uniform vec3 u_material_specular_uv1;
+        uniform float u_material_specular_color_texcoord;
+        uniform vec3 u_material_specular_color_uv0;
+        uniform vec3 u_material_specular_color_uv1;
+    """
+    renpy.register_shader("renpy.gltf.specular", glsl=300, fragment_functions="#define GLTF_SPECULAR 1\n")
+
+    _gltf_clearcoat_variables = """
+        uniform float u_material_clearcoat_factor;
+        uniform float u_material_clearcoat_roughness_factor;
+        uniform float u_material_clearcoat_normal_scale;
+        uniform float u_material_clearcoat_normals_present;
+        uniform sampler2D u_tex_clearcoat;
+        uniform sampler2D u_tex_clearcoat_roughness;
+        uniform sampler2D u_tex_clearcoat_normals;
+        uniform float u_material_clearcoat_texcoord;
+        uniform vec3 u_material_clearcoat_uv0;
+        uniform vec3 u_material_clearcoat_uv1;
+        uniform float u_material_clearcoat_roughness_texcoord;
+        uniform vec3 u_material_clearcoat_roughness_uv0;
+        uniform vec3 u_material_clearcoat_roughness_uv1;
+        uniform float u_material_clearcoat_normals_texcoord;
+        uniform vec3 u_material_clearcoat_normals_uv0;
+        uniform vec3 u_material_clearcoat_normals_uv1;
+    """
+    renpy.register_shader("renpy.gltf.clearcoat", glsl=300, fragment_functions="#define GLTF_CLEARCOAT 1\n")
+
+    _gltf_sheen_variables = """
+        uniform vec3 u_material_sheen_color_factor;
+        uniform float u_material_sheen_roughness_factor;
+        uniform sampler2D u_tex_sheen_color;
+        uniform sampler2D u_tex_sheen_roughness;
+        uniform float u_material_sheen_color_texcoord;
+        uniform vec3 u_material_sheen_color_uv0;
+        uniform vec3 u_material_sheen_color_uv1;
+        uniform float u_material_sheen_roughness_texcoord;
+        uniform vec3 u_material_sheen_roughness_uv0;
+        uniform vec3 u_material_sheen_roughness_uv1;
+    """
+    renpy.register_shader("renpy.gltf.sheen", glsl=300, fragment_functions="#define GLTF_SHEEN 1\n")
+
+    _gltf_cascade_variables = """
+        uniform mat4 u_gltf_cascade_matrices[24];
+        uniform float u_gltf_cascade_count;
+        uniform vec4 u_gltf_cascade_splits;
+        uniform float u_gltf_cascade_near;
+        uniform vec3 u_gltf_cascade_eye;
+        uniform vec3 u_gltf_cascade_forward;
+    """
+    renpy.register_shader("renpy.gltf.cascades", glsl=300, fragment_functions="#define GLTF_CASCADES 1\n")
+
+    _gltf_glass_shadow_variables = """
+        uniform sampler2D u_gltf_glass_color;
+        uniform sampler2D u_gltf_glass_depth;
+        uniform sampler2D u_gltf_caustics;
+    """
+    renpy.register_shader("renpy.gltf.colored_shadows", glsl=300, fragment_functions="#define GLTF_COLORED_SHADOWS 1\n")
+    renpy.register_shader("renpy.gltf.caustics", glsl=300, fragment_functions="#define GLTF_CAUSTICS 1\n")
+
+    renpy.register_shader("renpy.gltf.pbr", glsl=300, variables="""
+        uniform mat4 u_model;
+        uniform mat4 u_model_OP_inverse_transpose;
+        uniform mat4 u_projection_OP_inverse;
+        uniform mat4 u_view_OP_inverse;
+        uniform mat4 u_projectionview;
+        uniform sampler2D u_tex_base_color;
+        uniform sampler2D u_tex_metalness;
+        uniform sampler2D u_tex_normals;
+        uniform sampler2D u_tex_lightmap;
+        uniform sampler2D u_tex_emissive;
+        uniform sampler2D u_tex_environment;
+        uniform vec2 u_tex_environment_OP_res;
+        uniform float u_gltf_environment_pages;
+        uniform float u_gltf_probe_count;
+        uniform vec4 u_gltf_probe_min[2];
+        uniform vec4 u_gltf_probe_max[2];
+        uniform vec4 u_gltf_probe_origin[2];
+        uniform sampler2D u_tex_transmission;
+        uniform sampler2D u_tex_thickness;
+        uniform sampler2D u_gltf_background;
+        uniform sampler2D u_gltf_background_depth;
+        uniform vec2 u_gltf_background_OP_res;
+        uniform float u_gltf_transmission_enabled;
+        uniform float u_material_transmission_factor;
+        uniform float u_material_thickness_factor;
+        uniform float u_material_ior;
+        uniform float u_material_attenuation_distance;
+        uniform vec3 u_material_attenuation_color;
+        uniform float u_material_transmission_texcoord;
+        uniform vec3 u_material_transmission_uv0;
+        uniform vec3 u_material_transmission_uv1;
+        uniform float u_material_thickness_texcoord;
+        uniform vec3 u_material_thickness_uv0;
+        uniform vec3 u_material_thickness_uv1;
+        uniform vec4 u_color_base;
+        uniform float u_material_metallicfactor;
+        uniform float u_material_roughnessfactor;
+        uniform vec3 u_material_emissivefactor;
+        uniform float u_material_emissive_strength;
+        uniform float u_material_normal_scale;
+        uniform float u_gltf_orthographic_camera;
+        uniform float u_material_occlusion_strength;
+        uniform float u_material_normals_present;
+        uniform float u_material_unlit;
+        uniform float u_material_twosided;
+        uniform float u_material_gltf_alphamode;
+        uniform float u_material_gltf_alphacutoff;
+        uniform int u_gltf_light_count;
+        uniform vec4 u_gltf_light_positions[8];
+        uniform vec4 u_gltf_light_directions[8];
+        uniform vec4 u_gltf_light_colors[8];
+        uniform vec4 u_gltf_light_cones[8];
+        uniform float u_gltf_meters_per_unit;
+        uniform sampler2D u_gltf_shadow;
+        uniform mat4 u_gltf_shadow_matrices[8];
+        uniform vec4 u_gltf_shadow_data[8];
+        uniform vec4 u_gltf_shadow_atlas;
+        uniform float u_material_receive_shadows;
+        uniform float u_gltf_environment_intensity;
+        uniform float u_gltf_environment_rotation;
+        uniform float u_material_base_color_texcoord;
+        uniform vec3 u_material_base_color_uv0;
+        uniform vec3 u_material_base_color_uv1;
+        uniform float u_material_metalness_texcoord;
+        uniform vec3 u_material_metalness_uv0;
+        uniform vec3 u_material_metalness_uv1;
+        uniform float u_material_normals_texcoord;
+        uniform vec3 u_material_normals_uv0;
+        uniform vec3 u_material_normals_uv1;
+        uniform float u_material_lightmap_texcoord;
+        uniform vec3 u_material_lightmap_uv0;
+        uniform vec3 u_material_lightmap_uv1;
+        uniform float u_material_emissive_texcoord;
+        uniform vec3 u_material_emissive_uv0;
+        uniform vec3 u_material_emissive_uv1;
+        in vec2 a_tex_coord;
+        in vec2 a_tex_coord1;
+        in vec4 a_color;
+        in vec3 a_normal;
+        in vec3 a_tangent;
+        in vec3 a_bitangent;
+        in vec4 a_position;
+        out vec2 v__uv0;
+        out vec2 v__uv1;
+        out vec4 v__color;
+        out vec3 v__position;
+        out vec3 v__normal;
+        out vec3 v__tangent;
+        out vec3 v__bitangent;
+        out vec4 v__eye;
+    """ + _gltf_specular_variables + _gltf_clearcoat_variables + _gltf_sheen_variables + _gltf_cascade_variables + _gltf_glass_shadow_variables, vertex_200="""
+        v__uv0 = a_tex_coord;
+        v__uv1 = a_tex_coord1;
+        v__color = clamp(a_color, 0.0, 1.0);
+        v__position = (u_model * a_position).xyz;
+        v__normal = mat3(u_model_OP_inverse_transpose) * a_normal;
+        v__tangent = mat3(u_model) * a_tangent;
+        v__bitangent = mat3(u_model) * a_bitangent;
+        // Ren'Py includes the camera's default center and Z offset in its projection.
+        v__eye = u_view_OP_inverse * (u_projection_OP_inverse * vec4(0.0, 0.0, 1.0, 0.0));
+        if (u_gltf_orthographic_camera > 0.5) v__eye = u_view_OP_inverse * vec4(0.0, 0.0, 1.0, 0.0);
+    """, fragment_functions=_gltf_brdf_functions + """
+        vec2 l__uv(float coord, vec3 row0, vec3 row1) {
+            vec3 uv = vec3(mix(v__uv0, v__uv1, coord), 1.0);
+            return vec2(dot(row0, uv), dot(row1, uv));
+        }
+        vec2 l__environment_uv(vec2 uv, float band, float page) {
+            vec2 tile_size = u_tex_environment_OP_res / vec2(u_gltf_environment_pages, 8.0);
+            uv = clamp(uv, 0.5 / tile_size, vec2(1.0) - 0.5 / tile_size);
+            return (uv + vec2(page, band)) / vec2(u_gltf_environment_pages, 8.0);
+        }
+        vec3 l__environment_page(vec3 direction, float band, float page, float rotation) {
+            direction = normalize(direction);
+            float c = cos(rotation), s = sin(rotation);
+            vec3 d = vec3(c * direction.x - s * direction.z, direction.y, s * direction.x + c * direction.z);
+            vec2 uv = l__sphere_uv(d);
+            uv.x = fract(uv.x);
+            vec3 color = texture(u_tex_environment, l__environment_uv(uv, band, page)).rgb;
+            float edge = min(uv.x, 1.0 - uv.x);
+            float width = u_tex_environment_OP_res.x / u_gltf_environment_pages;
+            if (edge * width < 0.5) {
+                uv.x = 1.0 - uv.x;
+                color = mix(texture(u_tex_environment, l__environment_uv(uv, band, page)).rgb, color, 0.5 + edge * width);
+            }
+            return color;
+        }
+        vec3 l__environment(vec3 direction, float band) {
+            vec3 probes = vec3(0.0);
+            float total = 0.0;
+            for (int i = 0; i < 2; ++i) {
+                if (float(i) >= u_gltf_probe_count) break;
+                vec3 lower = v__position - u_gltf_probe_min[i].xyz;
+                vec3 upper = u_gltf_probe_max[i].xyz - v__position;
+                float edge = min(min(min(lower.x, lower.y), lower.z), min(min(upper.x, upper.y), upper.z));
+                if (edge < 0.0) continue;
+                float weight = u_gltf_probe_min[i].w > 0.0 ? clamp(edge / u_gltf_probe_min[i].w, 0.0, 1.0) : 1.0;
+                vec3 corrected = direction;
+                if (band < 5.5) {
+                    vec3 safe = mix(vec3(-1.0), vec3(1.0), step(vec3(0.0), direction)) * max(abs(direction), vec3(0.00001));
+                    vec3 far_plane = max(-lower / safe, upper / safe);
+                    float distance = min(min(far_plane.x, far_plane.y), far_plane.z);
+                    corrected = v__position + direction * distance - u_gltf_probe_origin[i].xyz;
+                }
+                probes += weight * u_gltf_probe_max[i].w * l__environment_page(corrected, band, float(i + 1), u_gltf_probe_origin[i].w);
+                total += weight;
+            }
+            vec3 global = l__environment_page(direction, band, 0.0, u_gltf_environment_rotation);
+            return global * max(1.0 - total, 0.0) + probes / max(total, 1.0);
+        }
+        vec3 l__shadow_sample(int index, float nl, int cascade, vec3 world_dx, vec3 world_dy) {
+            vec4 data = u_gltf_shadow_data[index];
+            if (data.x < 0.0 || u_material_receive_shadows < 0.5) return vec3(1.0);
+            vec2 uv;
+            float depth;
+            float bias_scale = 1.0;
+            float tile = data.x;
+            vec3 dx, dy;
+            if (u_gltf_light_positions[index].w > 0.5 && data.z == 0.0) {
+                vec3 d = v__position - u_gltf_light_positions[index].xyz;
+                vec3 ad = abs(d);
+                vec2 face;
+                float major;
+                vec3 axis_u, axis_v, axis_z;
+                if (ad.x >= ad.y && ad.x >= ad.z) {
+                    tile += d.x > 0.0 ? 0.0 : 1.0;
+                    face = vec2(d.x > 0.0 ? -d.z : d.z, -d.y);
+                    major = ad.x;
+                    axis_u = vec3(0.0, 0.0, d.x > 0.0 ? -1.0 : 1.0);
+                    axis_v = vec3(0.0, -1.0, 0.0);
+                    axis_z = vec3(d.x > 0.0 ? 1.0 : -1.0, 0.0, 0.0);
+                } else if (ad.y >= ad.z) {
+                    tile += d.y > 0.0 ? 2.0 : 3.0;
+                    face = vec2(d.x, d.y > 0.0 ? d.z : -d.z);
+                    major = ad.y;
+                    axis_u = vec3(1.0, 0.0, 0.0);
+                    axis_v = vec3(0.0, 0.0, d.y > 0.0 ? 1.0 : -1.0);
+                    axis_z = vec3(0.0, d.y > 0.0 ? 1.0 : -1.0, 0.0);
+                } else {
+                    tile += d.z > 0.0 ? 4.0 : 5.0;
+                    face = vec2(d.z > 0.0 ? d.x : -d.x, -d.y);
+                    major = ad.z;
+                    axis_u = vec3(d.z > 0.0 ? 1.0 : -1.0, 0.0, 0.0);
+                    axis_v = vec3(0.0, -1.0, 0.0);
+                    axis_z = vec3(0.0, 0.0, d.z > 0.0 ? 1.0 : -1.0);
+                }
+                uv = face / max(major, 0.000001) * 0.5 + 0.5;
+                depth = length(d) / data.y;
+                dx = vec3(0.5 * (vec2(dot(world_dx, axis_u), dot(world_dx, axis_v)) * major -
+                    face * dot(world_dx, axis_z)) / max(major * major, 0.000000000001),
+                    dot(d, world_dx) / max(length(d) * data.y, 0.000000000001));
+                dy = vec3(0.5 * (vec2(dot(world_dy, axis_u), dot(world_dy, axis_v)) * major -
+                    face * dot(world_dy, axis_z)) / max(major * major, 0.000000000001),
+                    dot(d, world_dy) / max(length(d) * data.y, 0.000000000001));
+            } else {
+                mat4 matrix = u_gltf_shadow_matrices[index];
+                #ifdef GLTF_CASCADES
+                    if (cascade > 0) matrix = u_gltf_cascade_matrices[index * 3 + cascade - 1];
+                    tile += float(cascade);
+                #endif
+                vec4 clip = matrix * vec4(v__position, 1.0);
+                if (clip.w <= 0.0) return vec3(1.0);
+                vec3 projected = clip.xyz / clip.w * 0.5 + 0.5;
+                vec4 clip_dx = matrix * vec4(world_dx, 0.0), clip_dy = matrix * vec4(world_dy, 0.0);
+                // Analytic derivatives stay valid across per-pixel cascade and cube-face branches.
+                dx = 0.5 * (clip_dx.xyz * clip.w - clip.xyz * clip_dx.w) / (clip.w * clip.w);
+                dy = 0.5 * (clip_dy.xyz * clip.w - clip.xyz * clip_dy.w) / (clip.w * clip.w);
+                uv = projected.xy;
+                depth = projected.z;
+                if (u_gltf_light_positions[index].w > 1.5) {
+                    bias_scale = data.z * data.y * data.y / max((data.y - data.z) * clip.w * clip.w, 0.000001);
+                }
+            }
+            if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))) || depth > 1.0 || depth < 0.0) return vec3(1.0);
+            vec2 grid = u_gltf_shadow_atlas.xy;
+            vec2 tile_origin = vec2(mod(tile, grid.x), floor(tile / grid.x));
+            float size = u_gltf_shadow_atlas.z;
+            float determinant = dx.x * dy.y - dx.y * dy.x;
+            vec2 gradient = vec2(0.0);
+            if (abs(determinant) > 0.000000000001) {
+                gradient = vec2(dx.z * dy.y - dy.z * dx.y, dy.z * dx.x - dx.z * dy.x) / determinant;
+            }
+            depth -= max(data.w * bias_scale * (1.0 + 2.0 * (1.0 - nl)), 0.0000002);
+            vec3 visible = vec3(0.0);
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    vec2 pixel = clamp(uv * size + vec2(float(x), float(y)), vec2(0.5), vec2(size - 0.5));
+                    vec2 atlas_uv = (tile_origin + pixel / size) / grid;
+                    float stored = texture(u_gltf_shadow, atlas_uv).r;
+                    float receiver = depth + dot(gradient, (floor(pixel) + 0.5) / size - uv);
+                    vec3 tint = vec3(1.0);
+                    #ifdef GLTF_COLORED_SHADOWS
+                        for (int layer = 0; layer < 2; ++layer) {
+                            vec2 glass_uv = vec2(atlas_uv.x, (atlas_uv.y + float(layer)) * 0.5);
+                            if (texture(u_gltf_glass_depth, glass_uv).r < receiver)
+                                tint *= texture(u_gltf_glass_color, glass_uv).rgb;
+                        }
+                    #endif
+                    #ifdef GLTF_CAUSTICS
+                        if (stored < 1.0 && abs(receiver - stored) < max(data.w * bias_scale * 5.0, 0.00005))
+                            tint = clamp(tint + texture(u_gltf_caustics, atlas_uv).rgb, vec3(0.0), vec3(4.0));
+                    #endif
+                    visible += receiver <= stored ? tint : vec3(0.0);
+                }
+            }
+            return visible / 9.0;
+        }
+        vec3 l__shadow(int index, float nl, vec3 world_dx, vec3 world_dy) {
+            #ifdef GLTF_CASCADES
+                if (u_gltf_light_positions[index].w < 0.5) {
+                    float depth = dot(v__position - u_gltf_cascade_eye, u_gltf_cascade_forward);
+                    if (depth < u_gltf_cascade_near || depth > u_gltf_cascade_splits[int(u_gltf_cascade_count) - 1]) return vec3(1.0);
+                    float lower = u_gltf_cascade_near;
+                    for (int level = 0; level < 4; ++level) {
+                        if (float(level) >= u_gltf_cascade_count) break;
+                        float upper = u_gltf_cascade_splits[level];
+                        if (depth <= upper) {
+                            vec3 value = l__shadow_sample(index, nl, level, world_dx, world_dy);
+                            float weight = smoothstep(mix(lower, upper, 0.9), upper, depth);
+                            if (weight > 0.0) {
+                                vec3 next = vec3(1.0);
+                                if (float(level + 1) < u_gltf_cascade_count)
+                                    next = l__shadow_sample(index, nl, level + 1, world_dx, world_dy);
+                                value = mix(value, next, weight);
+                            }
+                            return value;
+                        }
+                        lower = upper;
+                    }
+                }
+            #endif
+            return l__shadow_sample(index, nl, 0, world_dx, world_dy);
+        }
+    """, fragment_200="""
+        vec4 base = texture(u_tex_base_color, l__uv(u_material_base_color_texcoord,
+            u_material_base_color_uv0, u_material_base_color_uv1)) * u_color_base * v__color;
+        if (u_material_gltf_alphamode < 0.5) {
+            base.a = 1.0;
+        } else if (u_material_gltf_alphamode < 1.5) {
+            if (base.a < u_material_gltf_alphacutoff) discard;
+            base.a = 1.0;
+        }
+        #ifndef GLTF_PEEL_DEPTH
+        base.rgb = clamp(base.rgb, 0.0, 1.0);
+        vec3 color = base.rgb;
+        if (u_material_unlit < 0.5) {
+            vec3 V = normalize((v__eye.xyz - v__position * v__eye.w) * (v__eye.w < 0.0 ? -1.0 : 1.0));
+            vec3 N = normalize(v__normal);
+            vec3 geometric_normal = N;
+            float side = ((u_material_twosided > 0.5 || u_material_thickness_factor > 0.0)
+                && !gl_FrontFacing) ? -1.0 : 1.0;
+            vec2 normal_uv = l__uv(u_material_normals_texcoord, u_material_normals_uv0, u_material_normals_uv1);
+            // Differentiate the selected, transformed UVs so UV1 and mirrored mappings use the right basis.
+            vec3 px = dFdx(v__position), py = dFdy(v__position);
+            vec2 tx = dFdx(normal_uv), ty = dFdy(normal_uv);
+            float determinant = tx.x * ty.y - tx.y * ty.x;
+            bool authored_basis = u_material_normals_texcoord < 0.5 &&
+                all(equal(u_material_normals_uv0.xy, vec2(1.0, 0.0))) &&
+                all(equal(u_material_normals_uv1.xy, vec2(0.0, 1.0))) &&
+                dot(v__tangent, v__tangent) > 0.00000001;
+            if (u_material_normals_present > 0.5 && (authored_basis || abs(determinant) > 0.00000001)) {
+                vec3 T = v__tangent, B = v__bitangent;
+                if (!authored_basis) {
+                    T = (px * ty.y - py * tx.y) / determinant;
+                    B = (py * tx.x - px * ty.x) / determinant;
+                }
+                T = normalize(T - N * dot(N, T));
+                B = normalize(cross(N, T)) * (dot(cross(N, T), B) < 0.0 ? -1.0 : 1.0);
+                vec3 normal = texture(u_tex_normals, normal_uv).xyz * 2.0 - 1.0;
+                normal.xy *= u_material_normal_scale;
+                N = normalize(mat3(T, B, N) * normal);
+            }
+            N *= side;
+            vec2 mr = texture(u_tex_metalness, l__uv(u_material_metalness_texcoord,
+                u_material_metalness_uv0, u_material_metalness_uv1)).gb;
+            float metallic = clamp(mr.y * u_material_metallicfactor, 0.0, 1.0);
+            float roughness = clamp(mr.x * u_material_roughnessfactor, 0.0, 1.0);
+            // Regularize the direct-light singularity without blurring perfect-mirror environment reflections.
+            float a = max(roughness * roughness, 0.045 * 0.045);
+            bool infinite_ior = u_material_ior == 0.0;
+            float ior = infinite_ior ? 10000.0 : max(u_material_ior, 1.0);
+            float dielectric_f0 = infinite_ior ? 1.0 : pow((ior - 1.0) / (ior + 1.0), 2.0);
+            vec3 f0 = mix(vec3(dielectric_f0), base.rgb, metallic);
+            float f90 = ior > 1.0 ? 1.0 : metallic;
+            vec3 dielectric_reflectance = vec3(dielectric_f0);
+            float specular_weight = 1.0;
+            #ifdef GLTF_SPECULAR
+                specular_weight = clamp(u_material_specular_factor * texture(u_tex_specular,
+                    l__uv(u_material_specular_texcoord, u_material_specular_uv0, u_material_specular_uv1)).a, 0.0, 1.0);
+                if (ior <= 1.0) specular_weight = 0.0;
+                vec3 specular_color = u_material_specular_color_factor * texture(u_tex_specular_color,
+                    l__uv(u_material_specular_color_texcoord, u_material_specular_color_uv0, u_material_specular_color_uv1)).rgb;
+                dielectric_reflectance = min(vec3(dielectric_f0) * specular_color, vec3(1.0)) * specular_weight;
+                f0 = mix(dielectric_reflectance, base.rgb, metallic);
+                f90 = mix(specular_weight, 1.0, metallic);
+            #endif
+            #ifdef GLTF_CLEARCOAT
+                float coat = clamp(u_material_clearcoat_factor * texture(u_tex_clearcoat,
+                    l__uv(u_material_clearcoat_texcoord, u_material_clearcoat_uv0, u_material_clearcoat_uv1)).r, 0.0, 1.0);
+                float coat_roughness = clamp(u_material_clearcoat_roughness_factor * texture(u_tex_clearcoat_roughness,
+                    l__uv(u_material_clearcoat_roughness_texcoord, u_material_clearcoat_roughness_uv0,
+                        u_material_clearcoat_roughness_uv1)).g, 0.0, 1.0);
+                vec3 coat_normal = geometric_normal;
+                vec2 coat_uv = l__uv(u_material_clearcoat_normals_texcoord,
+                    u_material_clearcoat_normals_uv0, u_material_clearcoat_normals_uv1);
+                vec2 coat_tx = dFdx(coat_uv), coat_ty = dFdy(coat_uv);
+                float coat_det = coat_tx.x * coat_ty.y - coat_tx.y * coat_ty.x;
+                bool coat_authored = u_material_clearcoat_normals_texcoord < 0.5 &&
+                    all(equal(u_material_clearcoat_normals_uv0.xy, vec2(1.0, 0.0))) &&
+                    all(equal(u_material_clearcoat_normals_uv1.xy, vec2(0.0, 1.0))) && dot(v__tangent, v__tangent) > 0.00000001;
+                if (u_material_clearcoat_normals_present > 0.5 && (coat_authored || abs(coat_det) > 0.00000001)) {
+                    vec3 T = coat_authored ? v__tangent : (px * coat_ty.y - py * coat_tx.y) / coat_det;
+                    vec3 B = coat_authored ? v__bitangent : (py * coat_tx.x - px * coat_ty.x) / coat_det;
+                    T = normalize(T - coat_normal * dot(coat_normal, T));
+                    B = normalize(cross(coat_normal, T)) * (dot(cross(coat_normal, T), B) < 0.0 ? -1.0 : 1.0);
+                    vec3 normal = texture(u_tex_clearcoat_normals, coat_uv).xyz * 2.0 - 1.0;
+                    normal.xy *= u_material_clearcoat_normal_scale;
+                    coat_normal = normalize(mat3(T, B, coat_normal) * normal);
+                }
+                coat_normal *= side;
+                float coat_nv = max(dot(coat_normal, V), 0.00001);
+                float coat_weight = coat * (0.04 + 0.96 * pow(1.0 - coat_nv, 5.0));
+                float coat_a = max(coat_roughness * coat_roughness, 0.045 * 0.045);
+                vec3 coat_lighting = vec3(0.0);
+            #endif
+            #ifdef GLTF_SHEEN
+                vec3 sheen_color = clamp(u_material_sheen_color_factor * texture(u_tex_sheen_color,
+                    l__uv(u_material_sheen_color_texcoord, u_material_sheen_color_uv0, u_material_sheen_color_uv1)).rgb,
+                    vec3(0.0), vec3(1.0));
+                float sheen_roughness = clamp(u_material_sheen_roughness_factor * texture(u_tex_sheen_roughness,
+                    l__uv(u_material_sheen_roughness_texcoord, u_material_sheen_roughness_uv0,
+                        u_material_sheen_roughness_uv1)).a, 0.0, 1.0);
+                float sheen_nv = max(dot(N, V), 0.00001);
+                vec2 sheen_lut_uv = l__environment_uv(vec2(sheen_nv, sheen_roughness), 7.0, 0.0);
+                float sheen_energy = clamp(texture(u_tex_environment, sheen_lut_uv).b, 0.0, 1.0);
+                float sheen_base_scale = 1.0 - max(max(sheen_color.r, sheen_color.g), sheen_color.b) * sheen_energy;
+                vec3 sheen_lighting = vec3(0.0);
+            #endif
+            float transmission = u_gltf_transmission_enabled * u_material_transmission_factor
+                * texture(u_tex_transmission, l__uv(u_material_transmission_texcoord,
+                    u_material_transmission_uv0, u_material_transmission_uv1)).r;
+            transmission = clamp(transmission, 0.0, 1.0);
+            float thickness = u_material_thickness_factor * texture(u_tex_thickness,
+                l__uv(u_material_thickness_texcoord, u_material_thickness_uv0, u_material_thickness_uv1)).g;
+            vec3 ray = -V;
+            bool total_internal_reflection = false;
+            if (transmission > 0.0 && thickness > 0.0) {
+                ray = refract(-V, N, gl_FrontFacing ? 1.0 / ior : ior);
+                total_internal_reflection = dot(ray, ray) < 0.000001;
+                if (total_internal_reflection) {
+                    f0 = mix(vec3(1.0), base.rgb, metallic);
+                    f90 = 1.0;
+                }
+            }
+            float nv = max(dot(N, V), 0.00001);
+            vec3 diffuse = base.rgb * (1.0 - metallic) * (1.0 - transmission) / 3.14159265359;
+            color = vec3(0.0);
+            for (int i = 0; i < 8; ++i) {
+                if (i >= u_gltf_light_count) break;
+                vec3 delta = u_gltf_light_positions[i].xyz - v__position;
+                float distance_scene = length(delta);
+                vec3 L = -u_gltf_light_directions[i].xyz;
+                float attenuation = 1.0;
+                if (u_gltf_light_positions[i].w > 0.5) {
+                    L = delta / max(distance_scene, 0.000001);
+                    float distance_m = distance_scene * u_gltf_meters_per_unit;
+                    attenuation = 1.0 / max(distance_m * distance_m, 0.000001);
+                    float range_m = u_gltf_light_directions[i].w;
+                    if (range_m > 0.0) attenuation *= max(1.0 - pow(distance_m / range_m, 4.0), 0.0);
+                    if (u_gltf_light_positions[i].w > 1.5) {
+                        float cone = dot(-L, u_gltf_light_directions[i].xyz);
+                        vec2 angles = u_gltf_light_cones[i].xy;
+                        float angular = clamp((cone - angles.y) / max(angles.x - angles.y, 0.000001), 0.0, 1.0);
+                        attenuation *= angular * angular;
+                    }
+                }
+                vec3 H = (V + L) / max(length(V + L), 0.00001);
+                float nl = max(dot(N, L), 0.0), nh = max(dot(N, H), 0.0);
+                float vh = max(dot(V, H), 0.0);
+                vec3 F = l__fresnel(vh, f0, f90);
+                float denominator = nh * nh * (a * a - 1.0) + 1.0;
+                float distribution = a * a / (3.14159265359 * denominator * denominator);
+                vec3 diffuse_weight = vec3(1.0) - F;
+                #ifdef GLTF_SPECULAR
+                    vec3 dielectric_fresnel = l__fresnel(vh, dielectric_reflectance, specular_weight);
+                    diffuse_weight = vec3(1.0 - max(max(dielectric_fresnel.r, dielectric_fresnel.g), dielectric_fresnel.b));
+                #endif
+                vec3 light = attenuation * l__shadow(i, nl, px, py) * u_gltf_light_colors[i].rgb;
+                color += (diffuse_weight * diffuse + distribution * l__visibility(nv, nl, a) * F)
+                    * nl * light;
+                #ifdef GLTF_CLEARCOAT
+                    float cnl = max(dot(coat_normal, L), 0.0), cnh = max(dot(coat_normal, H), 0.0);
+                    float cd = cnh * cnh * (coat_a * coat_a - 1.0) + 1.0;
+                    float distribution_coat = coat_a * coat_a / (3.14159265359 * cd * cd);
+                    coat_lighting += distribution_coat * l__visibility(coat_nv, cnl, coat_a) * cnl * light;
+                #endif
+                #ifdef GLTF_SHEEN
+                    sheen_lighting += sheen_color * gltf_sheen_brdf(nv, max(nl, 0.00001), nh, sheen_roughness) * nl * light;
+                #endif
+            }
+            if (u_gltf_environment_intensity > 0.0) {
+                vec3 R = reflect(-V, N);
+                float level = sqrt(roughness) * 5.0;
+                vec3 radiance = mix(l__environment(R, floor(level)), l__environment(R, ceil(level)), fract(level));
+                vec2 brdf_uv = l__environment_uv(vec2(nv, roughness), 7.0, 0.0);
+                vec2 brdf = texture(u_tex_environment, brdf_uv).rg;
+                vec3 indirect = radiance * (f0 * brdf.x + f90 * brdf.y);
+                vec3 diffuse_environment_weight = vec3(1.0) - f0;
+                #ifdef GLTF_SPECULAR
+                    diffuse_environment_weight = vec3(1.0 - max(max(dielectric_reflectance.r, dielectric_reflectance.g), dielectric_reflectance.b));
+                #endif
+                indirect += l__environment(N, 6.0) * base.rgb * (1.0 - metallic) * (1.0 - transmission) * diffuse_environment_weight;
+                float occlusion = texture(u_tex_lightmap, l__uv(u_material_lightmap_texcoord,
+                    u_material_lightmap_uv0, u_material_lightmap_uv1)).r;
+                indirect *= mix(1.0, occlusion, clamp(u_material_occlusion_strength, 0.0, 1.0));
+                color += indirect * u_gltf_environment_intensity;
+                #ifdef GLTF_CLEARCOAT
+                    vec3 cr = reflect(-V, coat_normal);
+                    float clevel = sqrt(coat_roughness) * 5.0;
+                    vec3 radiance_coat = mix(l__environment(cr, floor(clevel)), l__environment(cr, ceil(clevel)), fract(clevel));
+                    vec2 coat_brdf_uv = l__environment_uv(vec2(coat_nv, coat_roughness), 7.0, 0.0);
+                    vec2 coat_brdf = texture(u_tex_environment, coat_brdf_uv).rg;
+                    coat_lighting += radiance_coat * (coat_brdf.x + coat_brdf.y) * u_gltf_environment_intensity;
+                #endif
+                #ifdef GLTF_SHEEN
+                    sheen_lighting += l__environment(N, 6.0) * sheen_color * sheen_energy * u_gltf_environment_intensity;
+                #endif
+            }
+            if (transmission > 0.0 && metallic < 1.0 && !total_internal_reflection) {
+                float travel = 0.0;
+                if (thickness > 0.0) {
+                    vec3 local_ray = mat3(transpose(u_model_OP_inverse_transpose)) * ray;
+                    travel = thickness / max(length(local_ray), 0.000001);
+                }
+                vec2 screen_uv = gl_FragCoord.xy / u_gltf_background_OP_res;
+                vec2 sample_uv = screen_uv;
+                bool on_screen = true;
+                if (travel > 0.0) {
+                    vec4 exit_clip = u_projectionview * vec4(v__position + ray * travel, 1.0);
+                    sample_uv = exit_clip.xy / max(exit_clip.w, 0.000001) * 0.5 + 0.5;
+                    on_screen = exit_clip.w > 0.0 && all(greaterThanEqual(sample_uv, vec2(0.0)))
+                        && all(lessThanEqual(sample_uv, vec2(1.0)));
+                    if (on_screen && texture(u_gltf_background_depth, sample_uv).r < gl_FragCoord.z - 0.00001) {
+                        sample_uv = screen_uv;
+                    }
+                }
+                float blur = roughness * roughness * clamp(2.0 * (ior - 1.0), 0.0, 1.0);
+                float lod = blur * log2(max(u_gltf_background_OP_res.x, u_gltf_background_OP_res.y));
+                vec4 background = on_screen ? textureLod(u_gltf_background, sample_uv, lod) : vec4(0.0);
+                float band = sqrt(roughness) * 5.0;
+                vec3 environment = mix(l__environment(ray, floor(band)), l__environment(ray, ceil(band)), fract(band));
+                vec3 incoming = background.rgb + (1.0 - background.a) * environment * u_gltf_environment_intensity;
+                if (travel > 0.0 && u_material_attenuation_distance > 0.0) {
+                    incoming *= pow(u_material_attenuation_color,
+                        vec3(travel * u_gltf_meters_per_unit / u_material_attenuation_distance));
+                }
+                vec3 reflectance = l__fresnel(nv, f0, f90);
+                color += incoming * base.rgb * (vec3(1.0) - reflectance) * transmission * (1.0 - metallic);
+            }
+            #ifdef GLTF_SHEEN
+                color = color * sheen_base_scale + sheen_lighting;
+            #endif
+            color += texture(u_tex_emissive, l__uv(u_material_emissive_texcoord,
+                u_material_emissive_uv0, u_material_emissive_uv1)).rgb
+                * u_material_emissivefactor * u_material_emissive_strength;
+            #ifdef GLTF_CLEARCOAT
+                color = mix(color, coat_lighting, coat_weight);
+            #endif
+        }
+        fragment_color = vec4(clamp(color, vec3(0.0), vec3(65504.0)) * base.a, base.a);
+        #else
+        fragment_color = vec4(1.0, 1.0, 1.0, base.a);
+        #endif
+    """)
+
+    renpy.register_shader("renpy.gltf.peel_depth", glsl=300, variables="""
+        uniform sampler2D u_gltf_peel_previous;
+        uniform sampler2D u_gltf_peel_opaque;
+        uniform vec2 u_gltf_peel_previous_OP_res;
+        uniform float u_gltf_peel_first;
+    """, fragment_functions="#define GLTF_PEEL_DEPTH 1\n", fragment_150="""
+        vec2 peel_uv = gl_FragCoord.xy / u_gltf_peel_previous_OP_res;
+        float peel_epsilon = 1.5 / 16777216.0;
+        if (gl_FragCoord.z >= texture(u_gltf_peel_opaque, peel_uv).r) discard;
+        if (u_gltf_peel_first < 0.5 && gl_FragCoord.z <= texture(u_gltf_peel_previous, peel_uv).r + peel_epsilon) discard;
+    """, fragment_550="""
+        if (fragment_color.a <= 0.0) discard;
+        fragment_color = vec4(1.0);
+    """)
+
+    renpy.register_shader("renpy.gltf.peel_color", glsl=300, variables="""
+        uniform sampler2D u_gltf_peel_selected;
+        uniform vec2 u_gltf_peel_selected_OP_res;
+    """, fragment_150="""
+        float peel_selected = texture(u_gltf_peel_selected, gl_FragCoord.xy / u_gltf_peel_selected_OP_res).r;
+        if (peel_selected >= 1.0 || abs(gl_FragCoord.z - peel_selected) > 1.5 / 16777216.0) discard;
+    """, fragment_550="""
+        if (fragment_color.a <= 0.0) discard;
+    """)
+
+    renpy.register_shader("renpy.gltf.depth_copy", glsl=300, variables="""
+        uniform sampler2D tex0;
+        uniform sampler2D u_gltf_copy_depth;
+        in vec2 a_tex_coord;
+        out vec2 v__uv;
+    """, vertex_200="""
+        v__uv = a_tex_coord;
+    """, fragment_200="""
+        fragment_color = texture(tex0, v__uv);
+        gl_FragDepth = texture(u_gltf_copy_depth, v__uv).r;
+    """)
+
+    renpy.register_shader("renpy.gltf.shadow_copy", glsl=300, variables="""
+        uniform sampler2D u_gltf_shadow;
+        in vec2 a_tex_coord;
+        out vec2 v__uv;
+    """, vertex_200="""
+        v__uv = a_tex_coord;
+    """, fragment_200="""
+        gl_FragDepth = texture(u_gltf_shadow, v__uv).r;
+        fragment_color = vec4(1.0);
+    """)
+
+    renpy.register_shader("renpy.gltf.shadow", glsl=300, variables="""
+        uniform mat4 u_model;
+        uniform mat4 u_gltf_shadow_matrix;
+        uniform vec4 u_gltf_shadow_origin;
+        uniform float u_gltf_shadow_radial;
+        uniform float u_gltf_transmission_enabled;
+        uniform float u_material_transmission_factor;
+        uniform float u_material_metallicfactor;
+        uniform sampler2D u_tex_transmission;
+        uniform sampler2D u_tex_metalness;
+        uniform float u_material_transmission_texcoord;
+        uniform vec3 u_material_transmission_uv0;
+        uniform vec3 u_material_transmission_uv1;
+        uniform float u_material_metalness_texcoord;
+        uniform vec3 u_material_metalness_uv0;
+        uniform vec3 u_material_metalness_uv1;
+        uniform sampler2D u_tex_base_color;
+        uniform vec4 u_color_base;
+        uniform float u_material_base_color_texcoord;
+        uniform vec3 u_material_base_color_uv0;
+        uniform vec3 u_material_base_color_uv1;
+        uniform float u_material_gltf_alphamode;
+        uniform float u_material_gltf_alphacutoff;
+        uniform mat4 u_model_OP_inverse_transpose;
+        uniform vec4 u_gltf_shadow_direction;
+        uniform sampler2D u_gltf_glass_opaque;
+        uniform sampler2D u_gltf_glass_previous;
+        uniform float u_gltf_glass_level;
+        uniform vec2 u_gltf_glass_resolution;
+        uniform float u_gltf_meters_per_unit;
+        uniform float u_material_ior;
+        uniform float u_material_thickness_factor;
+        uniform float u_material_attenuation_distance;
+        uniform vec3 u_material_attenuation_color;
+        uniform float u_material_roughnessfactor;
+        uniform sampler2D u_tex_thickness;
+        uniform float u_material_thickness_texcoord;
+        uniform vec3 u_material_thickness_uv0;
+        uniform vec3 u_material_thickness_uv1;
+        in vec4 a_position;
+        in vec2 a_tex_coord;
+        in vec2 a_tex_coord1;
+        in vec4 a_color;
+        in vec3 a_normal;
+        out vec2 v__uv;
+        out float v__alpha;
+        out vec3 v__world;
+        out vec2 v__transmission_uv;
+        out vec2 v__metalness_uv;
+        out vec2 v__thickness_uv;
+        out vec3 v__glass_normal;
+        out vec4 v__glass_base;
+        out vec2 v__specular_uv;
+        out vec2 v__specular_color_uv;
+    """ + _gltf_specular_variables, vertex_200="""
+        vec4 world = u_model * a_position;
+        gl_Position = u_gltf_shadow_matrix * world;
+        v__world = world.xyz;
+        vec3 uv = vec3(mix(a_tex_coord, a_tex_coord1, u_material_base_color_texcoord), 1.0);
+        v__uv = vec2(dot(u_material_base_color_uv0, uv), dot(u_material_base_color_uv1, uv));
+        v__alpha = a_color.a * u_color_base.a;
+        uv = vec3(mix(a_tex_coord, a_tex_coord1, u_material_transmission_texcoord), 1.0);
+        v__transmission_uv = vec2(dot(u_material_transmission_uv0, uv), dot(u_material_transmission_uv1, uv));
+        uv = vec3(mix(a_tex_coord, a_tex_coord1, u_material_metalness_texcoord), 1.0);
+        v__metalness_uv = vec2(dot(u_material_metalness_uv0, uv), dot(u_material_metalness_uv1, uv));
+        #ifdef GLTF_SHADOW_GLASS
+            uv = vec3(mix(a_tex_coord, a_tex_coord1, u_material_thickness_texcoord), 1.0);
+            v__thickness_uv = vec2(dot(u_material_thickness_uv0, uv), dot(u_material_thickness_uv1, uv));
+            v__glass_normal = mat3(u_model_OP_inverse_transpose) * a_normal;
+            v__glass_base = a_color * u_color_base;
+            uv = vec3(mix(a_tex_coord, a_tex_coord1, u_material_specular_texcoord), 1.0);
+            v__specular_uv = vec2(dot(u_material_specular_uv0, uv), dot(u_material_specular_uv1, uv));
+            uv = vec3(mix(a_tex_coord, a_tex_coord1, u_material_specular_color_texcoord), 1.0);
+            v__specular_color_uv = vec2(dot(u_material_specular_color_uv0, uv), dot(u_material_specular_color_uv1, uv));
+        #endif
+    """, fragment_200="""
+        if (u_material_gltf_alphamode > 0.5 && u_material_gltf_alphamode < 1.5 &&
+                texture(u_tex_base_color, v__uv).a * v__alpha < u_material_gltf_alphacutoff) discard;
+        #ifndef GLTF_SHADOW_GLASS
+        // Transmitting texels use the optional colored atlas; the default keeps the legacy depth-only approximation.
+        if (u_gltf_transmission_enabled * u_material_transmission_factor
+                * texture(u_tex_transmission, v__transmission_uv).r > 0.0
+                && u_material_metallicfactor * texture(u_tex_metalness, v__metalness_uv).b < 1.0) discard;
+        gl_FragDepth = u_gltf_shadow_radial > 0.5
+            ? clamp(length(v__world - u_gltf_shadow_origin.xyz) / u_gltf_shadow_origin.w, 0.0, 1.0)
+            : gl_FragCoord.z;
+        fragment_color = vec4(1.0);
+        #else
+            float depth = u_gltf_shadow_radial > 0.5
+                ? clamp(length(v__world - u_gltf_shadow_origin.xyz) / u_gltf_shadow_origin.w, 0.0, 1.0) : gl_FragCoord.z;
+            vec2 atlas_uv = gl_FragCoord.xy / u_gltf_glass_resolution;
+            if (depth >= texture(u_gltf_glass_opaque, atlas_uv).r) discard;
+            if (u_gltf_glass_level > 0.5 && depth <= texture(u_gltf_glass_previous, atlas_uv).r + 1.5 / 16777216.0) discard;
+            vec4 base = texture(u_tex_base_color, v__uv) * v__glass_base;
+            float coverage = u_material_gltf_alphamode > 1.5 ? clamp(base.a, 0.0, 1.0) : 1.0;
+            float transmission = clamp(u_material_transmission_factor * texture(u_tex_transmission, v__transmission_uv).r, 0.0, 1.0);
+            float metallic = clamp(u_material_metallicfactor * texture(u_tex_metalness, v__metalness_uv).b, 0.0, 1.0);
+            if (coverage <= 0.0 || (u_material_gltf_alphamode < 1.5 && transmission * (1.0 - metallic) <= 0.0)) discard;
+            vec3 incident = u_gltf_shadow_direction.w > 0.5 ? normalize(v__world - u_gltf_shadow_origin.xyz) : u_gltf_shadow_direction.xyz;
+            vec3 normal = normalize(v__glass_normal);
+            if (dot(normal, incident) > 0.0) normal = -normal;
+            float cosine = max(-dot(normal, incident), 0.0);
+            float ior = u_material_ior == 0.0 ? 10000.0 : max(u_material_ior, 1.0);
+            float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+            float weight = clamp(u_material_specular_factor * texture(u_tex_specular, v__specular_uv).a, 0.0, 1.0);
+            if (ior <= 1.0) weight = 0.0;
+            vec3 specular = u_material_specular_color_factor * texture(u_tex_specular_color, v__specular_color_uv).rgb;
+            vec3 fresnel = mix(min(vec3(f0) * specular, vec3(1.0)), vec3(1.0), pow(1.0 - cosine, 5.0)) * weight;
+            vec3 ray = refract(incident, normal, 1.0 / ior);
+            float thickness = u_material_thickness_factor * texture(u_tex_thickness, v__thickness_uv).g;
+            float travel = thickness / max(length(mat3(transpose(u_model_OP_inverse_transpose)) * ray), 0.000001);
+            vec3 tint = clamp(base.rgb, 0.0, 1.0) * transmission * (1.0 - metallic) * (vec3(1.0) - fresnel);
+            if (travel > 0.0 && u_material_attenuation_distance > 0.0)
+                tint *= pow(u_material_attenuation_color, vec3(travel * u_gltf_meters_per_unit / u_material_attenuation_distance));
+            tint = mix(vec3(1.0), tint, coverage);
+            if (all(greaterThanEqual(tint, vec3(0.999999)))) discard;
+            gl_FragDepth = depth;
+            fragment_color = vec4(tint, coverage);
+            #ifdef GLTF_CAUSTIC_DATA
+                float energy = 1.0 - pow(clamp(u_material_roughnessfactor * texture(u_tex_metalness, v__metalness_uv).g, 0.0, 1.0), 2.0);
+                if (transmission * (1.0 - metallic) <= 0.0 || travel * u_gltf_meters_per_unit > 65504.0) discard;
+                fragment_color = vec4(ray * energy, travel * u_gltf_meters_per_unit);
+            #endif
+        #endif
+    """)
+
+    renpy.register_shader("renpy.gltf.shadow_glass", glsl=300,
+        vertex_functions="#define GLTF_SHADOW_GLASS 1\n", fragment_functions="#define GLTF_SHADOW_GLASS 1\n")
+
+    renpy.register_shader("renpy.gltf.caustic_data", glsl=300, fragment_functions="#define GLTF_CAUSTIC_DATA 1\n")
+
+    renpy.register_shader("renpy.gltf.caustic_scatter", glsl=300, variables="""
+        uniform mat4 u_gltf_shadow_matrix;
+        uniform mat4 u_gltf_caustic_inverse;
+        uniform vec4 u_gltf_shadow_origin;
+        uniform float u_gltf_shadow_radial;
+        uniform vec4 u_gltf_caustic_tile;
+        uniform float u_gltf_caustic_extent;
+        uniform float u_gltf_caustic_size;
+        uniform float u_gltf_caustic_warp;
+        uniform float u_gltf_meters_per_unit;
+        uniform sampler2D u_gltf_shadow;
+        uniform sampler2D u_gltf_glass_color;
+        uniform sampler2D u_gltf_glass_depth;
+        uniform sampler2D u_gltf_caustic_data;
+        in vec2 a_tex_coord;
+        out vec2 v__source;
+        out float v__valid;
+        out float v__energy;
+    """, vertex_functions="""
+        vec2 l__caustic_atlas(vec2 uv) {
+            return u_gltf_caustic_tile.xy + uv * u_gltf_caustic_tile.zw;
+        }
+        vec3 l__caustic_project(vec3 point) {
+            vec4 clip = u_gltf_shadow_matrix * vec4(point, 1.0);
+            if (clip.w <= 0.0) return vec3(-1.0);
+            vec3 projected = clip.xyz / clip.w * 0.5 + 0.5;
+            if (u_gltf_shadow_radial > 0.5)
+                projected.z = length(point - u_gltf_shadow_origin.xyz) / u_gltf_shadow_origin.w;
+            return projected;
+        }
+        float l__caustic_delta(vec3 point) {
+            vec3 p = l__caustic_project(point);
+            if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) return -2.0;
+            float depth = textureLod(u_gltf_shadow, l__caustic_atlas(p.xy), 0.0).r;
+            return depth < 1.0 ? p.z - depth : -2.0;
+        }
+    """, vertex_200="""
+        // Reconstruct at the same texel center that supplied the nearest ray, preserving identity point-light rays.
+        vec2 source_uv = clamp((floor(a_tex_coord * u_gltf_caustic_size) + 0.5) / u_gltf_caustic_size,
+            vec2(0.5 / u_gltf_caustic_size), vec2(1.0 - 0.5 / u_gltf_caustic_size));
+        v__source = a_tex_coord;
+        v__valid = 0.0;
+        v__energy = 0.0;
+        vec2 atlas_uv = l__caustic_atlas(source_uv);
+        vec2 glass_uv = vec2(atlas_uv.x, atlas_uv.y * 0.5);
+        float depth = textureLod(u_gltf_glass_depth, glass_uv, 0.0).r;
+        vec4 data = textureLod(u_gltf_caustic_data, atlas_uv, 0.0);
+        vec2 output_uv = a_tex_coord;
+        float energy = length(data.xyz);
+        if (depth < 1.0 && energy > 0.00001) {
+            vec4 entry = u_gltf_caustic_inverse * vec4(source_uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+            vec3 start = entry.xyz / entry.w;
+            if (u_gltf_shadow_radial > 0.5) {
+                entry = u_gltf_caustic_inverse * vec4(source_uv * 2.0 - 1.0, 0.0, 1.0);
+                start = u_gltf_shadow_origin.xyz + normalize(entry.xyz / entry.w - u_gltf_shadow_origin.xyz) * depth * u_gltf_shadow_origin.w;
+            }
+            vec3 ray = data.xyz / energy;
+            start += ray * data.a / u_gltf_meters_per_unit;
+            if (u_gltf_caustic_warp < 0.5) {
+                v__valid = textureLod(u_gltf_shadow, atlas_uv, 0.0).r < 1.0 ? 1.0 : 0.0;
+            } else {
+                float previous = l__caustic_delta(start);
+                float lower = 0.0;
+                for (int step = 1; step <= 32; ++step) {
+                    float upper = u_gltf_caustic_extent * float(step) / 32.0;
+                    float delta = l__caustic_delta(start + ray * upper);
+                    if (previous < 0.0 && previous > -1.5 && delta >= 0.0) {
+                        for (int refine = 0; refine < 6; ++refine) {
+                            float middle = (lower + upper) * 0.5;
+                            if (l__caustic_delta(start + ray * middle) < 0.0) lower = middle;
+                            else upper = middle;
+                        }
+                        output_uv = a_tex_coord + l__caustic_project(start + ray * ((lower + upper) * 0.5)).xy - source_uv;
+                        v__valid = 1.0;
+                        break;
+                    }
+                    lower = upper;
+                    previous = delta;
+                }
+            }
+            v__energy = energy;
+        }
+        gl_Position = vec4(output_uv * 2.0 - 1.0, 0.0, 1.0);
+    """, fragment_200="""
+        if (v__valid < 0.999) discard;
+        vec2 uv = u_gltf_caustic_tile.xy + clamp(v__source, vec2(0.5 / u_gltf_caustic_size),
+            vec2(1.0 - 0.5 / u_gltf_caustic_size)) * u_gltf_caustic_tile.zw;
+        vec4 transmission = texture(u_gltf_glass_color, vec2(uv.x, uv.y * 0.5));
+        vec3 flux = max(transmission.rgb - vec3(1.0 - transmission.a), vec3(0.0)) * v__energy;
+        vec2 dx = dFdx(v__source), dy = dFdy(v__source);
+        float density = clamp(abs(dx.x * dy.y - dx.y * dy.x) * u_gltf_caustic_size * u_gltf_caustic_size, 0.0, 4.0);
+        // Replace straight transmitted flux rather than adding the same energy twice.
+        fragment_color = vec4(flux * (u_gltf_caustic_warp > 0.5 ? density : -1.0), 0.0);
+    """)
+
+    renpy.register_shader("renpy.gltf.environment", glsl=300, variables="""
+        uniform sampler2D tex0;
+        uniform vec2 res0;
+        uniform float u_gltf_filter_samples;
+        in vec2 a_tex_coord;
+        out vec2 v__uv;
+    """, vertex_200="""
+        v__uv = a_tex_coord;
+    """, fragment_functions=_gltf_brdf_functions + """
+        vec3 l__half_vector(vec2 xi, float a) {
+            float cos_theta = sqrt((1.0 - xi.y) / (1.0 + (a * a - 1.0) * xi.y));
+            float sin_theta = sqrt(max(1.0 - cos_theta * cos_theta, 0.0));
+            float phi = 6.28318530718 * xi.x;
+            return vec3(cos(phi) * sin_theta, sin(phi) * sin_theta, cos_theta);
+        }
+    """, fragment_200="""
+        float band = floor(v__uv.y * 8.0);
+        vec2 uv = vec2(v__uv.x, fract(v__uv.y * 8.0));
+        float longitude = (uv.x - 0.5) * 6.28318530718;
+        float latitude = uv.y * 3.14159265359;
+        vec3 N = vec3(sin(latitude) * cos(longitude), -cos(latitude), sin(latitude) * sin(longitude));
+        vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
+        vec3 T = normalize(cross(up, N));
+        mat3 basis = mat3(T, cross(N, T), N);
+        vec3 sum = vec3(0.0);
+        float weight_sum = 0.0;
+        float roughness = (band / 5.0) * (band / 5.0);
+        if (band > 6.5) roughness = uv.y;
+        float a = max(roughness * roughness, 0.0001);
+        float nv = max(uv.x, 0.00001);
+        vec3 V = vec3(sqrt(max(1.0 - nv * nv, 0.0)), 0.0, nv);
+        int samples = int(clamp(u_gltf_filter_samples, 64.0, 256.0));
+        for (int i = 0; i < 256; ++i) {
+            if (i >= samples) break;
+            int bits = i;
+            float radical = 0.0, fraction = 0.5;
+            for (int j = 0; j < 8; ++j) {
+                radical += float(bits % 2) * fraction;
+                bits /= 2;
+                fraction *= 0.5;
+            }
+            vec2 xi = vec2((float(i) + 0.5) / float(samples), radical);
+            vec3 H = l__half_vector(xi, a);
+            if (band > 6.5) {
+                vec3 L = reflect(-V, H);
+                float nl = max(L.z, 0.0), vh = max(dot(V, H), 0.0);
+                float weight = 4.0 * l__visibility(nv, nl, a) * nl * vh / max(H.z, 0.00001);
+                float fresnel = pow(1.0 - vh, 5.0);
+                sum.rg += vec2(1.0 - fresnel, fresnel) * weight;
+                vec3 cloth_light = vec3(cos(6.28318530718 * xi.x) * sqrt(xi.y),
+                    sin(6.28318530718 * xi.x) * sqrt(xi.y), sqrt(1.0 - xi.y));
+                vec3 cloth_half = normalize(V + cloth_light);
+                sum.b += 3.14159265359 * gltf_sheen_brdf(nv, max(cloth_light.z, 0.00001),
+                    max(cloth_half.z, 0.0), roughness);
+                weight_sum += 1.0;
+            } else {
+                vec3 local_direction = reflect(vec3(0.0, 0.0, -1.0), H);
+                if (band > 5.5) {
+                    float phi = 6.28318530718 * xi.x;
+                    local_direction = vec3(cos(phi) * sqrt(xi.y), sin(phi) * sqrt(xi.y), sqrt(1.0 - xi.y));
+                }
+                float weight = band > 5.5 ? 1.0 : max(local_direction.z, 0.0);
+                vec3 direction = basis * local_direction;
+                float nh = max(H.z, 0.00001);
+                float denominator = nh * nh * (a * a - 1.0) + 1.0;
+                float pdf = a * a / (12.56637061436 * denominator * denominator);
+                if (band > 5.5) pdf = max(local_direction.z, 0.00001) / 3.14159265359;
+                float lod = max(0.0, 0.5 * log2(res0.x * res0.y / (float(samples) * pdf * 12.56637061436)));
+                if (band < 0.5) lod = 0.0;
+                sum += textureLod(tex0, l__sphere_uv(direction), lod).rgb * weight;
+                weight_sum += weight;
+            }
+        }
+        vec3 filtered = sum / max(weight_sum, 0.00001);
+        if (band > 6.5) filtered.b = clamp(filtered.b, 0.0, 1.0);
+        fragment_color = vec4(filtered, 1.0);
+    """)
+
+    _gltf_output_functions = """
+        vec4 gltf_scene_output(vec4 color, float exposure) {
+            vec3 linear_rgb = max(color.rgb / max(color.a, 0.00001), vec3(0.0)) * exposure;
+            linear_rgb = min(linear_rgb, vec3(1.0e20));
+            linear_rgb /= vec3(1.0) + linear_rgb;
+            vec3 srgb = mix(12.92 * linear_rgb,
+                1.055 * pow(linear_rgb, vec3(1.0 / 2.4)) - 0.055,
+                step(vec3(0.0031308), linear_rgb));
+            return vec4(srgb * color.a, color.a);
+        }
+    """
+
+    renpy.register_shader("renpy.gltf.baked_srgb", glsl=300, fragment_400="""
+        // Legacy baked RGB is straight sRGB; its alpha may hold camera depth rather than coverage.
+        vec3 rgb = max(fragment_color.rgb, vec3(0.0));
+        rgb = mix(rgb / 12.92, pow((rgb + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), rgb));
+        fragment_color = vec4(rgb, 1.0);
+    """)
+
+    renpy.register_shader("renpy.gltf.guard", glsl=300, vertex_functions="#define GLTF_GUARD 1\n",
+        fragment_functions="#define GLTF_GUARD 1\n")
+
+    renpy.register_shader("renpy.gltf.coverage", glsl=300, fragment_550="""
+        fragment_color = vec4(1.0);
+    """)
+
+    _gltf_guard_variables = """
+        uniform sampler2D u_gltf_output_mask;
+        uniform vec4 u_gltf_output_region;
+        out vec2 v__mask_uv;
+    """
+    _gltf_guard_vertex = """
+        #ifdef GLTF_GUARD
+        v__mask_uv = a_tex_coord;
+        v__uv = u_gltf_output_region.xy + a_tex_coord * u_gltf_output_region.zw;
+        #endif
+    """
+    _gltf_guard_fragment = """
+        #ifdef GLTF_GUARD
+        fragment_color *= texture(u_gltf_output_mask, v__mask_uv).r;
+        #endif
+    """
+
+    renpy.register_shader("renpy.gltf.dof", glsl=300, variables="""
+        uniform sampler2D tex0;
+        uniform vec2 res0;
+        uniform sampler2D u_gltf_scene_depth;
+        uniform mat4 u_gltf_dof_inverse;
+        uniform float u_gltf_dof_perspective;
+        uniform float u_gltf_dof_scale;
+        uniform vec3 u_gltf_dof_focus;
+        uniform float u_gltf_exposure;
+        in vec2 a_tex_coord;
+        out vec2 v__uv;
+    """ + _gltf_guard_variables, vertex_200="""
+        v__uv = a_tex_coord;
+    """ + _gltf_guard_vertex, fragment_functions=_gltf_output_functions + """
+        float l__distance(vec2 uv) {
+            float depth = texture(u_gltf_scene_depth, uv).r;
+            vec4 point = u_gltf_dof_inverse * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+            float distance = u_gltf_dof_perspective > 0.5 ? abs(1.0 / point.w) : abs(point.z / point.w);
+            return distance * u_gltf_dof_scale;
+        }
+    """, fragment_200="""
+        float distance = l__distance(v__uv);
+        float radius = clamp(abs(distance - u_gltf_dof_focus.x) / u_gltf_dof_focus.y, 0.0, 1.0)
+            * u_gltf_dof_focus.z;
+        vec4 color = texture(tex0, v__uv);
+        float weight = 1.0;
+        // Ignore subpixel defocus, including depth24 reconstruction noise at the focal plane.
+        for (int i = 1; i <= 16 && radius > 0.25; ++i) {
+            float angle = float(i) * 2.39996323;
+            vec2 offset = vec2(cos(angle), sin(angle)) * sqrt(float(i) / 16.0) * radius / res0;
+            vec2 uv = clamp(v__uv + offset, 0.5 / res0, vec2(1.0) - 0.5 / res0);
+            float sample_distance = l__distance(uv);
+            if (sample_distance + u_gltf_dof_focus.y * 0.25 < distance) continue;
+            color += texture(tex0, uv);
+            weight += 1.0;
+        }
+        fragment_color = gltf_scene_output(color / weight, u_gltf_exposure);
+    """ + _gltf_guard_fragment)
+
+    renpy.register_shader("renpy.gltf.output", glsl=300, variables="""
+        uniform sampler2D tex0;
+        uniform float u_gltf_exposure;
+        in vec2 a_tex_coord;
+        out vec2 v__uv;
+    """ + _gltf_guard_variables, vertex_200="""
+        v__uv = a_tex_coord;
+    """ + _gltf_guard_vertex, fragment_functions=_gltf_output_functions, fragment_200="""
+        vec4 color = texture(tex0, v__uv);
+        fragment_color = gltf_scene_output(color, u_gltf_exposure);
+    """ + _gltf_guard_fragment)
+
     renpy.register_shader("renpy.blur", glsl = 300, variables = """
         uniform sampler2D tex0;
         uniform vec2 res0;

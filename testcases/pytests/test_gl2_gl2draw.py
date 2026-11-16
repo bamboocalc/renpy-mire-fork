@@ -90,3 +90,21 @@ def test_normal_resize_keeps_existing_policy(mocker, window_environment):
     draw.resize()
 
     get_window.return_value.resize.assert_called_once_with((1024, 768), opengl=True, fullscreen=True, maximized=False)
+
+
+def test_gltf_profiling_keeps_cpu_counts_without_gpu_timers():
+    """Optional GPU timers cannot prevent CPU profiling; snapshots and resets preserve independent numeric data."""
+    from renpy.gl2.gl2draw import GltfProfiler
+
+    profiler = GltfProfiler(SimpleNamespace(gles=True, info={}, gl_extensions=set()))
+    profiler.begin("opaque")
+    profiler.record("opaque", 0.002, draws=2, triangles=6, culled=1)
+    profiler.record("refraction_copy", 0.001, copies=1)
+    snapshot = profiler.snapshot(reset=True)
+    assert not snapshot["gpu_supported"] and snapshot["gpu_pending"] == 0
+    assert snapshot["passes"]["opaque"]["cpu_ms"] == pytest.approx(2)
+    assert snapshot["passes"]["opaque"]["draws"] == 2
+    assert snapshot["passes"]["opaque"]["triangles"] == 6
+    assert snapshot["passes"]["refraction_copy"]["copies"] == 1
+    assert profiler.snapshot()["passes"] == {}
+    assert snapshot["passes"]["opaque"]["draws"] == 2

@@ -3,8 +3,13 @@
 import pathlib
 import re
 
-
 OPTIONAL_FUNCTIONS = {
+    "glQueryCounter",
+    "glGetQueryObjectui64v",
+    "glGenQueries",
+    "glDeleteQueries",
+    "glGetQueryObjectuiv",
+    "glGetQueryiv",
     "glCompressedTexImage2D",
     "glGetProgramBinary",
     "glProgramBinary",
@@ -16,7 +21,8 @@ def process(dn):
     required = set()
 
     for fn in dn.glob("**/*.pyx"):
-        for m in re.finditer(r"gl[A-Z]\w+", fn.read_text()):
+        # OpenGL entry points start glVerb; glTF's file signature is not a function.
+        for m in re.finditer(r"\bgl[A-Z][a-z]\w+", fn.read_text()):
             required.add(m.group(0))
 
     required = list(required - OPTIONAL_FUNCTIONS)

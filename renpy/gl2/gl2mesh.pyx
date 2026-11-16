@@ -139,6 +139,15 @@ MODEL_NT_LAYOUT.add_attribute("a_normal", 3) # The normal.
 MODEL_NT_LAYOUT.add_attribute("a_tangent", 3) # The tangent.
 MODEL_NT_LAYOUT.add_attribute("a_bitangent", 3) # The bitangent.
 
+# The standard glTF material adds a second UV set and linear vertex color.
+GLTF_LAYOUT = AttributeLayout(MODEL_N_LAYOUT.offset, MODEL_N_LAYOUT.stride)
+GLTF_LAYOUT.add_attribute("a_tex_coord1", 2)
+GLTF_LAYOUT.add_attribute("a_color", 4)
+
+GLTF_T_LAYOUT = AttributeLayout(MODEL_NT_LAYOUT.offset, MODEL_NT_LAYOUT.stride)
+GLTF_T_LAYOUT.add_attribute("a_tex_coord1", 2)
+GLTF_T_LAYOUT.add_attribute("a_color", 4)
+
 # The layout of a mesh used with text.
 TEXT_LAYOUT = AttributeLayout()
 TEXT_LAYOUT.add_attribute("a_tex_coord", 2) # The texture coordinate.

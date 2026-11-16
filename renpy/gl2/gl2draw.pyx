@@ -28,6 +28,7 @@ DEF ANGLE = False
 
 from libc.stdlib cimport malloc, free
 from libc.math cimport roundf
+from libc.stdint cimport uint64_t
 from renpy.pygame.sdl cimport *
 from renpy.uguu.gl cimport *
 import renpy.gl2.gl2functions
@@ -49,6 +50,9 @@ import renpy.uguu.gl as uguugl
 
 cimport renpy.display.render as render
 from renpy.display.render cimport Render, MATRIX_PROJECTION, MATRIX_VIEW, MATRIX_MODEL
+
+# Python scene preparation uses the same matrix boundaries as the native traversal.
+MATRIX_KINDS = (MATRIX_VIEW, MATRIX_PROJECTION, MATRIX_MODEL)
 from renpy.display.matrix cimport Matrix, MatrixStack
 
 cimport renpy.gl2.gl2texture as gl2texture
@@ -129,6 +133,113 @@ cdef set get_gl_extensions_list():
     return extensions
 
 
+# Timer entry points are optional, and belong to the current desktop context.
+ctypedef void (__stdcall *QueryCounter)(GLuint, GLenum) noexcept
+ctypedef void (__stdcall *QueryResult64)(GLuint, GLenum, uint64_t *) noexcept
+ctypedef void (__stdcall *QueryObjects)(GLsizei, GLuint *) noexcept
+ctypedef void (__stdcall *QueryAvailable)(GLuint, GLenum, GLuint *) noexcept
+ctypedef void (__stdcall *QueryBits)(GLenum, GLenum, GLint *) noexcept
+
+
+cdef class GltfProfiler:
+    cdef QueryCounter counter
+    cdef QueryResult64 result64
+    cdef QueryObjects generate, delete
+    cdef QueryAvailable available
+    cdef GLuint active[2]
+    cdef uint64_t timestamp_mask
+    cdef object category
+    cdef list pending
+    cdef dict totals
+    cdef public bint gpu
+    cdef public int dropped
+
+    def __init__(self, draw):
+        cdef QueryBits bits_query
+        cdef GLint bits = 0
+        self.pending, self.totals = [], {}
+        self.category = None
+        self.dropped = 0
+        version = parse_glsl_version(draw.info.get("gpu_driver_version"))
+        if not draw.gles and ("GL_ARB_timer_query" in draw.gl_extensions or (version or 0) >= 330):
+            self.counter = <QueryCounter>SDL_GL_GetProcAddress(b"glQueryCounter")
+            self.result64 = <QueryResult64>SDL_GL_GetProcAddress(b"glGetQueryObjectui64v")
+            self.generate = <QueryObjects>SDL_GL_GetProcAddress(b"glGenQueries")
+            self.delete = <QueryObjects>SDL_GL_GetProcAddress(b"glDeleteQueries")
+            self.available = <QueryAvailable>SDL_GL_GetProcAddress(b"glGetQueryObjectuiv")
+            bits_query = <QueryBits>SDL_GL_GetProcAddress(b"glGetQueryiv")
+            if bits_query != NULL:
+                bits_query(0x8E28, 0x8864, &bits)  # GL_TIMESTAMP, GL_QUERY_COUNTER_BITS.
+            if bits > 0:
+                self.timestamp_mask = (~<uint64_t>0) >> max(64 - bits, 0)
+            self.gpu = (self.counter != NULL and self.result64 != NULL and self.generate != NULL
+                and self.delete != NULL and self.available != NULL and bits > 0)
+
+    def record(self, category, seconds, draws=0, triangles=0, culled=0, copies=0):
+        row = self.totals.setdefault(category, {"cpu_ms": 0.0, "gpu_ms": 0.0,
+            "draws": 0, "triangles": 0, "culled": 0, "copies": 0, "gpu_intervals": 0})
+        row["cpu_ms"] += seconds * 1000
+        row["draws"] += draws
+        row["triangles"] += triangles
+        row["culled"] += culled
+        row["copies"] += copies
+
+    def begin(self, category):
+        if not self.gpu or category == self.category:
+            return
+        self.end()
+        if len(self.pending) >= 256:
+            self.poll()
+        if len(self.pending) >= 256:
+            self.dropped += 1
+            return
+        self.generate(2, self.active)
+        self.counter(self.active[0], 0x8E28)  # GL_TIMESTAMP.
+        self.category = category
+
+    def end(self):
+        if self.category is not None:
+            self.counter(self.active[1], 0x8E28)
+            self.pending.append((self.category, self.active[0], self.active[1]))
+            self.category = None
+
+    def poll(self):
+        cdef GLuint ready, queries[2]
+        cdef uint64_t start, end
+        while self.pending:
+            category, queries[0], queries[1] = self.pending[0]
+            self.available(queries[1], 0x8867, &ready)  # GL_QUERY_RESULT_AVAILABLE, never waits.
+            if not ready:
+                break
+            self.result64(queries[0], 0x8866, &start)
+            self.result64(queries[1], 0x8866, &end)
+            self.delete(2, queries)
+            self.pending.pop(0)
+            self.record(category, 0)
+            self.totals[category]["gpu_ms"] += ((end - start) & self.timestamp_mask) / 1000000.0
+            self.totals[category]["gpu_intervals"] += 1
+
+    def snapshot(self, reset=False):
+        self.end()
+        self.poll()
+        rv = {"gpu_supported": bool(self.gpu), "gpu_pending": len(self.pending), "gpu_dropped": self.dropped,
+            "passes": {name: dict(row) for name, row in self.totals.items()}}
+        if reset:
+            # Unavailable queries belong to the old measurement window.
+            self.close()
+            self.totals.clear()
+            self.dropped = 0
+        return rv
+
+    def close(self):
+        cdef GLuint queries[2]
+        self.end()
+        for category, first, last in self.pending:
+            queries[0], queries[1] = first, last
+            self.delete(2, queries)
+        self.pending.clear()
+
+
 cdef void clear_color_buffer(int x, int y, int width, int height) noexcept nogil:
     glEnable(GL_SCISSOR_TEST)
     glScissor(x, y, width, height)
@@ -184,6 +295,7 @@ cdef class GL2Draw:
         self.gl_extensions = set()
 
         self.state_cache = GLStateCache()
+        self.gltf_profile = None
         self.default_vao = 0
 
         # Has the position of this window ever been set?
@@ -690,6 +802,10 @@ cdef class GL2Draw:
 
     def on_resize(self, first=False, full_reset=False):
 
+        profiling = self.gltf_profile is not None
+        if profiling and full_reset:
+            self.gltf_profile.close()
+
         if first:
             full_reset = True
 
@@ -809,6 +925,8 @@ cdef class GL2Draw:
         if full_reset:
             self.shader_cache.load()
             self.texture_loader.init()
+            if profiling:
+                self.gltf_profile = GltfProfiler(self)
         else:
             self.texture_loader.cleanup()
 
@@ -942,6 +1060,7 @@ cdef class GL2Draw:
         Called when terminating the use of the OpenGL context.
         """
 
+        self.set_gltf_profiling(False)
         self.kill_textures()
 
         if self.texture_loader is not None:
@@ -1398,6 +1517,9 @@ cdef class GL2Draw:
         size of `what`.
         """
 
+        if isinstance(what, Render) and what.properties and "gltf_target" in what.properties:
+            properties = dict(properties or {})
+            properties.update(what.properties["gltf_target"])
         if properties is None:
             properties = {}
             need_mipmap = False
@@ -1596,7 +1718,20 @@ cdef class GL2Draw:
 
     def kill_textures(self):
         if self.texture_loader is not None:
+            self.texture_loader.shadow_cache.clear()
+            self.texture_loader.environment_cache.clear()
             self.texture_loader.cleanup()
+
+    def set_gltf_profiling(self, enabled=True):
+        """Developer instrumentation on the render thread; disabled by default, never waits for GPU queries."""
+        if self.gltf_profile is not None:
+            self.gltf_profile.close()
+        self.gltf_profile = GltfProfiler(self) if enabled else None
+
+    def get_gltf_profile(self, reset=False):
+        if self.gltf_profile is None:
+            return None
+        return self.gltf_profile.snapshot(reset)
 
     def event_peek_sleep(self):
         pass
@@ -1647,6 +1782,28 @@ def set_scissor(scissor):
         glScissor(scissor[0], scissor[1], scissor[2], scissor[3])
 
 
+cdef inline float determinant3(Matrix m) noexcept:
+    return (m.xdx * (m.ydy * m.zdz - m.ydz * m.zdy)
+        - m.xdy * (m.ydx * m.zdz - m.ydz * m.zdx)
+        + m.xdz * (m.ydx * m.zdy - m.ydy * m.zdx))
+
+
+cdef object gltf_pass(dict properties, shaders, dict uniforms):
+    category = properties.get("gltf_pass")
+    if category in ("shadow", "shadow_resolve", "shadow_glass", "shadow_glass_resolve", "caustics",
+            "depth_of_field", "transparency_depth", "transparency_copy", "transparency_layer", "refraction_guard_mask"):
+        return category
+    if "renpy.gltf.output" in shaders:
+        return "output"
+    if "renpy.gltf.environment" in shaders:
+        return "environment"
+    if properties.get("gltf_transmission", False) and uniforms.get("u_gltf_transmission_enabled", 0):
+        return "transmission"
+    if properties.get("transparent", False):
+        return "blend"
+    return "opaque" if properties.get("gltf_winding", False) else "other"
+
+
 def set_cull_face(cull_face):
     """
     Sets the cull face.
@@ -1680,6 +1837,9 @@ def set_cull_face(cull_face):
     else:
         glDisable(GL_CULL_FACE)
         glCullFace(GL_BACK)
+        if cull_face in ("both", "both_reverse"):
+            # Standard materials need a stable gl_FrontFacing even when culling is disabled.
+            glFrontFace(GL_CCW if current_invert_front_face != (cull_face == "both_reverse") else GL_CW)
 
 
 cdef class GL2DrawingContext:
@@ -1698,7 +1858,7 @@ cdef class GL2DrawingContext:
         self.projectionview_matrix = Matrix(None)
         self.model_matrix = Matrix(None)
 
-    cdef GL2DrawingContext child_context(self):
+    cdef GL2DrawingContext child_context(self, bint cache=True):
         """
         Returns the child GL2DrawingContext, with its fields and matrices
         having the same values as this GL2DrawingContex.
@@ -1706,10 +1866,11 @@ cdef class GL2DrawingContext:
 
         cdef GL2DrawingContext rv
 
-        rv = self._child_context
+        rv = self._child_context if cache else None
         if rv is None:
             rv = GL2DrawingContext()
-            self._child_context = rv
+            if cache:
+                self._child_context = rv
 
         rv.width = self.width
         rv.height = self.height
@@ -1730,6 +1891,7 @@ cdef class GL2DrawingContext:
 
         rv.pixel_perfect = self.pixel_perfect
         rv.has_depth = self.has_depth
+        rv.transparent_models = self.transparent_models
         rv.cull_face = self.cull_face
 
         return rv
@@ -1816,15 +1978,8 @@ cdef class GL2DrawingContext:
 
     cdef object draw_model(self, model):
 
-        cdef GL2Draw gl2draw = renpy.display.draw
         cdef Mesh mesh = model.mesh
-
-        # Handle cull_face.
-        if self.cull_face is not current_cull_face:
-            set_cull_face(self.cull_face)
-
-        if self.scissor != current_scissor:
-            set_scissor(self.scissor)
+        cdef GL2DrawingContext snapshot
 
         # If a clip polygon is in place, clip the mesh with it.
         if self.clip_polygon is not None:
@@ -1844,9 +1999,14 @@ cdef class GL2DrawingContext:
             self.model_matrix.inplace_multiply(model.reverse)
 
         if self.properties.get("frustum_cull", False) and isinstance(mesh, Mesh3):
-            if not (<Mesh3>mesh).is_visible(self.projectionview_matrix * self.model_matrix):
+            visibility = (model.uniforms["u_gltf_shadow_matrix"] if "gltf_shadow_viewport" in self.properties
+                else self.projectionview_matrix)
+            if not (<Mesh3>mesh).is_visible(visibility * self.model_matrix):
                 if renpy.config.debug_image_cache:
                     model_stats["culled"] += 1
+                profiler = renpy.display.draw.gltf_profile
+                if profiler is not None:
+                    profiler.record(gltf_pass(self.properties, model.shaders or (), model.uniforms or {}), 0, culled=1)
                 return
 
         if model.shaders:
@@ -1858,6 +2018,53 @@ cdef class GL2DrawingContext:
         if model.uniforms:
             self.merge_uniforms(model.uniforms)
 
+        transparent = (self.properties.get("transparent", False)
+                and (not self.properties.get("gltf_transmission", False)
+                    or self.uniforms.get("u_gltf_transmission_enabled", 0.0)
+                    or self.uniforms.get("u_material_gltf_alphamode", 0.0) == 2.0))
+        mode = self.properties.get("gltf_draw_mode")
+        if (mode == "opaque" and transparent) or (mode in ("peel", "layer") and not transparent):
+            return
+        if self.transparent_models is not None and transparent and mode not in ("peel", "layer"):
+            center = (0.0, 0.0, 0.0)
+            if isinstance(model.mesh, Mesh3) and (<Mesh3>model.mesh).bounds is not None:
+                bounds = (<Mesh3>model.mesh).bounds
+                center = ((bounds[0] + bounds[3]) * 0.5, (bounds[1] + bounds[4]) * 0.5,
+                    (bounds[2] + bounds[5]) * 0.5)
+            depth = (self.view_matrix * self.model_matrix).transform(*center, components=3)[2]
+            snapshot = self.child_context(False)
+            snapshot.transparent_models = None
+            # shortcut: sort mesh centers by default; GLTFScene transparency_layers enables per-pixel ordering.
+            self.transparent_models.append((depth, len(self.transparent_models), snapshot, model, mesh))
+            return
+
+        self.draw_mesh(model, mesh)
+
+    cdef void draw_mesh(self, model, Mesh mesh):
+        cdef GL2Draw gl2draw = renpy.display.draw
+        cdef GLint previous_viewport[4]
+        profiler = gl2draw.gltf_profile
+        if profiler is not None:
+            category = gltf_pass(self.properties, self.shaders, self.uniforms)
+            profiler.begin(category)
+            started = time.perf_counter()
+
+        cull_face = self.cull_face
+        if (self.properties.get("gltf_winding", False)
+                and determinant3(self.model_matrix) * determinant3(self.view_matrix) > 0.0):
+            # The model-to-Ren'Py basis already reflects Y; a positive determinant is another reflection.
+            if cull_face == "ccw":
+                cull_face = "cw"
+            elif cull_face == "cw":
+                cull_face = "ccw"
+            elif cull_face == "both":
+                cull_face = "both_reverse"
+        if cull_face is not current_cull_face:
+            set_cull_face(cull_face)
+
+        if self.scissor != current_scissor:
+            set_scissor(self.scissor)
+
         if self.debug:
             import renpy.gl2.gl2debug as gl2debug
             gl2debug.geometry(mesh, self.view_matrix * self.model_matrix, 1, 1)
@@ -1867,7 +2074,65 @@ cdef class GL2DrawingContext:
         if renpy.config.debug_image_cache:
             model_stats["drawn"] += 1
             model_stats["triangles"] += mesh.triangles
-        program.draw(self, model, mesh)
+        shadow_viewport = self.properties.get("gltf_shadow_viewport")
+        if shadow_viewport is not None:
+            glGetIntegerv(GL_VIEWPORT, previous_viewport)
+            glViewport(shadow_viewport[0], shadow_viewport[1], shadow_viewport[2], shadow_viewport[3])
+        try:
+            program.draw(self, model, mesh)
+            if profiler is not None:
+                profiler.record(category, time.perf_counter() - started, draws=1, triangles=mesh.triangles)
+        finally:
+            if shadow_viewport is not None:
+                glViewport(previous_viewport[0], previous_viewport[1], previous_viewport[2], previous_viewport[3])
+
+    cdef void draw_transparent(self):
+        cdef GL2DrawingContext ctx
+        captured = None
+        regions = []
+        pending = self.transparent_models
+        if not pending:
+            return
+        try:
+            pending.sort()
+            glDepthMask(False)
+            for depth, order, ctx, model, mesh in pending:
+                refractive = ctx.properties.get("gltf_transmission", False) and ctx.uniforms.get("u_gltf_transmission_enabled", 0.0)
+                if refractive:
+                    background = ctx.uniforms["u_gltf_background"]
+                    if isinstance(background, Render):
+                        background = background.cached_texture
+                    standard = all(shader in ("renpy.geometry", "renpy.texture", "renpy.alpha", "renpy.matrixcolor",
+                        "renpy.gltf.pbr", "renpy.gltf.specular", "renpy.gltf.clearcoat", "renpy.gltf.sheen",
+                        "renpy.gltf.cascades", "renpy.gltf.colored_shadows", "renpy.gltf.caustics")
+                        for shader in ctx.shaders)
+                    smooth = standard and (ctx.uniforms.get("u_material_roughnessfactor", 1) == 0
+                        or ctx.uniforms.get("u_material_ior", 1.5) == 1)
+                    region = (renpy.gl2.gltf.refraction_region(mesh,
+                        ctx.projectionview_matrix * ctx.model_matrix, ctx.width, ctx.height)
+                        if standard and isinstance(mesh, Mesh3) else None)
+                    batch = ctx.properties.get("gltf_refraction_batch", False) and smooth and region is not None
+                    batch = batch and ctx.uniforms.get("u_material_thickness_factor", 0) == 0
+                    overlaps = region is None or any(previous is None or
+                        (region[0] < previous[2] and previous[0] < region[2]
+                            and region[1] < previous[3] and previous[1] < region[3]) for previous in regions)
+                    if captured is not background or not batch or overlaps:
+                        profiler = renpy.display.draw.gltf_profile
+                        if profiler is not None:
+                            profiler.begin("refraction_copy")
+                            started = time.perf_counter()
+                        background.capture_framebuffer(mipmap=not smooth)
+                        if profiler is not None:
+                            profiler.record("refraction_copy", time.perf_counter() - started, copies=1)
+                        captured, regions = background, []
+                    regions.append(region)
+                else:
+                    captured, regions = None, []
+                glDepthMask(bool(refractive and ctx.uniforms.get("u_material_gltf_alphamode", 0.0) != 2.0))
+                ctx.draw_mesh(model, mesh)
+        finally:
+            glDepthMask(True)
+            pending.clear()
 
     cdef void clip_to_scissor(self):
         """
@@ -1992,11 +2257,13 @@ cdef class GL2DrawingContext:
 
         # Handle clipping.
         if (r.xclipping or r.yclipping):
+            guard = (self.properties.get("gltf_guard_margin", (0, 0))
+                if r.properties and r.properties.get("gltf_camera_viewport", False) else (0, 0))
             new_clip_polygon = Polygon.rectangle(
-                0 if r.xclipping else -BIG_PIXELS,
-                0 if r.yclipping else -BIG_PIXELS,
-                r.width if r.xclipping else BIG_PIXELS,
-                r.height if r.yclipping else BIG_PIXELS)
+                -guard[0] if r.xclipping else -BIG_PIXELS,
+                -guard[1] if r.yclipping else -BIG_PIXELS,
+                r.width + guard[0] if r.xclipping else BIG_PIXELS,
+                r.height + guard[1] if r.yclipping else BIG_PIXELS)
 
             if self.clip_polygon is not None:
                 self.clip_polygon = new_clip_polygon.intersect(self.clip_polygon)
@@ -2023,11 +2290,13 @@ cdef class GL2DrawingContext:
                 if self.scissor != current_scissor:
                     set_scissor(self.scissor)
 
+                glDepthMask(True)
                 glClear(GL_DEPTH_BUFFER_BIT)
                 glEnable(GL_DEPTH_TEST)
                 glDepthFunc(GL_LEQUAL)
 
                 self.has_depth = True
+                self.transparent_models = [ ]
 
             cull_face = r.properties.get("cull_face", False)
             if cull_face is not False:
@@ -2120,6 +2389,7 @@ cdef class GL2DrawingContext:
                 ctx.draw_one(child)
 
         if has_depth:
+            self.draw_transparent()
             glDisable(GL_DEPTH_TEST)
 
         return 0
@@ -2188,27 +2458,38 @@ def draw_render(what, int drawable_width, int drawable_height, Matrix projection
     ctx.pixel_perfect = True
     # A depth or cull_face property on the top-level render would otherwise persist into later passes.
     ctx.has_depth = False
+    ctx.transparent_models = None
     ctx.cull_face = None
 
     if renpy.config.nearest_neighbor:
         ctx.properties["texture_scaling"] = "nearest"
 
-    ctx.draw_one(what)
+    try:
+        ctx.draw_one(what)
+    finally:
+        profiler = renpy.display.draw.gltf_profile
+        if profiler is not None:
+            profiler.end()
+            profiler.poll()
+        set_scissor(None)
+        glDepthMask(True)
+        glDisable(GL_DEPTH_TEST)
 
-    set_scissor(None)
+        # Restore the GL state to Ren'Py's defaults after the render pass.
+        state_cache.set_blend(GL_FUNC_ADD, GL_FUNC_ADD, GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
+        state_cache.set_color_mask(True, True, True, True)
 
-    # Restore the GL state to Ren'Py's defaults after the render pass.
-    state_cache.set_blend(GL_FUNC_ADD, GL_FUNC_ADD, GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
-    state_cache.set_color_mask(True, True, True, True)
+        # Disable all vertex attrib arrays.
+        state_cache.sync_attrib_arrays(0)
 
-    # Disable all vertex attrib arrays.
-    state_cache.sync_attrib_arrays(0)
+        while ctx is not None:
+            ctx.uniforms = None
+            ctx.properties = None
+            if ctx.transparent_models is not None:
+                ctx.transparent_models.clear()
+                ctx.transparent_models = None
 
-    while ctx is not None:
-        ctx.uniforms = None
-        ctx.properties = None
-
-        ctx = ctx._child_context
+            ctx = ctx._child_context
 
 
 

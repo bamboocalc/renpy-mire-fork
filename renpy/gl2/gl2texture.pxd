@@ -59,6 +59,8 @@ cdef class TextureLoader:
     cdef bint hdr_targets
 
     cdef public dict upload_stats
+    cdef public object shadow_cache
+    cdef public object environment_cache
 
 
 cdef class GLTexture(GL2Model):

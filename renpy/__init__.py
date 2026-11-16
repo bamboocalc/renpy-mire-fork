@@ -580,6 +580,7 @@ def import_all():
     import renpy.gl2.gl2texture
     import renpy.gl2.live2d
     import renpy.gl2.assimp
+    import renpy.gl2.gltf
 
     import renpy.minstore
     import renpy.defaultstore

@@ -102,6 +102,9 @@ image_cache_size_mb = 400
 # Additional imported-model data retained after leaving prediction; textures have their own cache.
 gltf_model_cache_size_mb = 0
 
+# Renderer-owned shadow targets, independent of saved scene state.
+gltf_shadow_cache_size_mb = 64
+
 # Maximum bytes per cooperative upload step; zero uploads a whole texture.
 texture_upload_chunk_size = 0
 

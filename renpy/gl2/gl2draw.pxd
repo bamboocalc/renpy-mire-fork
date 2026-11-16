@@ -24,6 +24,7 @@ cimport renpy.display.render as render
 from renpy.gl2.gl2texture cimport TextureLoader
 from renpy.gl2.gl2polygon cimport Polygon
 from renpy.gl2.gl2statecache cimport GLStateCache
+from renpy.gl2.gl2mesh cimport Mesh
 from renpy.display.render cimport Render
 
 from renpy.uguu.gl cimport *
@@ -97,6 +98,8 @@ cdef class GL2Draw:
 
     cdef public GLStateCache state_cache
 
+    cdef public object gltf_profile
+
     # The vertex array object bound for the lifetime of a core-profile
     # context, which has no default one.
     cdef GLuint default_vao
@@ -163,13 +166,16 @@ cdef class GL2DrawingContext:
     # Has depth been enabled?
     cdef bint has_depth
 
+    # Blended draws shared by the contexts in one depth-enabled scene.
+    cdef list transparent_models
+
     # Enables or disables face culling. None if disabled. If enabled, "cw" or "ccw", giving the
     # winding order in the Ren'Py virtual coordinate system.
     cdef object cull_face
 
     cdef GLStateCache state_cache
 
-    cdef GL2DrawingContext child_context(self)
+    cdef GL2DrawingContext child_context(self, bint cache=*)
 
     cdef dict merge_properties(self, dict old, dict child)
 
@@ -178,6 +184,10 @@ cdef class GL2DrawingContext:
     cdef void correct_pixel_perfect(self)
 
     cdef object draw_model(self, model)
+
+    cdef void draw_mesh(self, model, Mesh mesh)
+
+    cdef void draw_transparent(self)
 
     cdef void clip_to_scissor(self)
 

@@ -188,6 +188,7 @@ ARRAY_ELEMENT_SIZES = {
     "vec2": 2 * sizeof(GLfloat),
     "vec3": 3 * sizeof(GLfloat),
     "vec4": 4 * sizeof(GLfloat),
+    "mat4": 16 * sizeof(GLfloat),
 
     "int": sizeof(GLint),
     "ivec2": 2 * sizeof(GLint),
@@ -290,11 +291,26 @@ cdef class IVec4ArraySetter(ArraySetter):
         _fill_array(value, values, self.length * 4)
         glUniform4iv(self.location, self.length, values)
 
+cdef class Mat4ArraySetter(ArraySetter):
+    cdef object set(self, GL2DrawingContext context, value):
+        cdef GLfloat *values = <GLfloat *> self.scratch
+        cdef Matrix matrix
+        cdef int i, j
+        if len(value) != self.length:
+            raise ValueError(f"Expected {self.length} matrices, got {len(value)}.")
+        for i in range(self.length):
+            matrix = value[i]
+            for j in range(16):
+                values[i * 16 + j] = matrix.m[j]
+        glUniformMatrix4fv(self.location, self.length, GL_FALSE, values)
+
+
 ARRAY_SETTERS = {
     "float" : FloatArraySetter,
     "vec2" : Vec2ArraySetter,
     "vec3" : Vec3ArraySetter,
     "vec4" : Vec4ArraySetter,
+    "mat4" : Mat4ArraySetter,
 
     "int" : IntArraySetter,
     "ivec2" : IVec2ArraySetter,
@@ -397,7 +413,8 @@ cdef class SamplerSetter(Setter):
                 anisotropy = 1.0
 
             if self.texture_scaling_key in context.properties:
-                mag_filter, min_filter = TEXTURE_SCALING[context.properties[self.texture_scaling_key]]
+                filtering = context.properties[self.texture_scaling_key]
+                mag_filter, min_filter = filtering if isinstance(filtering, tuple) else TEXTURE_SCALING[filtering]
             elif "texture_scaling" in context.properties:
                 mag_filter, min_filter = TEXTURE_SCALING[context.properties["texture_scaling"]]
 
@@ -497,6 +514,20 @@ cdef class ModelSizeGetter(Getter):
 cdef class LODBiasGetter(Getter):
     cdef object get(self, GL2DrawingContext context, GL2Model model):
         return context.uniforms.get(self.uniform_name, float(renpy.config.gl_lod_bias))
+
+
+cdef class GLTFLinearGetter(Getter):
+    cdef object get(self, GL2DrawingContext context, GL2Model model):
+        return context.uniforms.get(self.uniform_name, 0.0)
+
+
+cdef class GLTFDepthGetter(Getter):
+    cdef object get(self, GL2DrawingContext context, GL2Model model):
+        value = context.uniforms[self.uniform_name]
+        if type(value) is Render:
+            value = value.cached_texture
+        cdef GLTexture texture = value
+        return texture.depth_texture if texture.depth_texture is not None else texture
 
 
 cdef class TimeGetter(Getter):
@@ -737,6 +768,19 @@ UNIFORM_GETTER_CLASSES = {
     "u_transform": (TransformMatrixGetter, "mat4"),
     "u_model_size": (ModelSizeGetter, "vec2"),
     "u_lod_bias": (LODBiasGetter, "float"),
+    "u_gltf_linear": (GLTFLinearGetter, "float"),
+    "u_gltf_orthographic_camera": (GLTFLinearGetter, "float"),
+    "u_gltf_filter_samples": (GLTFLinearGetter, "float"),
+    "u_gltf_shadow": (GLTFDepthGetter, "sampler2D"),
+    "u_gltf_background_depth": (GLTFDepthGetter, "sampler2D"),
+    "u_gltf_scene_depth": (GLTFDepthGetter, "sampler2D"),
+    "u_gltf_peel_previous": (GLTFDepthGetter, "sampler2D"),
+    "u_gltf_peel_opaque": (GLTFDepthGetter, "sampler2D"),
+    "u_gltf_peel_selected": (GLTFDepthGetter, "sampler2D"),
+    "u_gltf_copy_depth": (GLTFDepthGetter, "sampler2D"),
+    "u_gltf_glass_opaque": (GLTFDepthGetter, "sampler2D"),
+    "u_gltf_glass_previous": (GLTFDepthGetter, "sampler2D"),
+    "u_gltf_glass_depth": (GLTFDepthGetter, "sampler2D"),
     "u_time": (TimeGetter, "float"),
     "u_random": (RandomGetter, "vec4"),
     "u_viewport": (ViewportGetter, "vec4"),

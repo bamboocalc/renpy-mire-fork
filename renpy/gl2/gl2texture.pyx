@@ -88,12 +88,16 @@ cdef class TextureLoader:
         self.total_texture_size = 0
         self.texture_load_queue = weakref.WeakSet()
         self.draw = draw
+        self.shadow_cache = renpy.gl2.gltf.ShadowCache(renpy.config.gltf_shadow_cache_size_mb * 1024 * 1024)
+        self.environment_cache = renpy.gl2.gltf.ShadowCache(64 * 1024 * 1024)
         self.compressed_formats = set()
         self.upload_stats = { "steps": 0, "seconds": 0.0, "max_seconds": 0.0,
             "mipmap_seconds": 0.0, "mipmap_max_seconds": 0.0,
             "allocation_seconds": 0.0, "allocation_max_seconds": 0.0 }
 
     def init(self):
+        self.shadow_cache.clear()
+        self.environment_cache.clear()
 
         if self.allocated:
             self.quit()
@@ -132,6 +136,8 @@ cdef class TextureLoader:
         Gets rid of this TextureLoader.
         """
 
+        self.shadow_cache.clear()
+        self.environment_cache.clear()
         cdef GLuint texnums[1]
 
         for texture_number in self.allocated:
