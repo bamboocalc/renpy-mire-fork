@@ -1113,13 +1113,23 @@ init python:
         #endif
     """
 
+    renpy.register_shader("renpy.gltf.scene_depth", glsl=300, variables="""
+        uniform sampler2D u_gltf_scene_depth;
+        uniform mat4 u_gltf_depth_inverse;
+        uniform float u_gltf_depth_perspective;
+        uniform float u_gltf_depth_scale;
+    """, fragment_functions="""
+        float gltf_scene_distance(vec2 uv) {
+            float depth = texture(u_gltf_scene_depth, uv).r;
+            vec4 point = u_gltf_depth_inverse * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+            float distance = u_gltf_depth_perspective > 0.5 ? abs(1.0 / point.w) : abs(point.z / point.w);
+            return distance * u_gltf_depth_scale;
+        }
+    """)
+
     renpy.register_shader("renpy.gltf.dof", glsl=300, variables="""
         uniform sampler2D tex0;
         uniform vec2 res0;
-        uniform sampler2D u_gltf_scene_depth;
-        uniform mat4 u_gltf_dof_inverse;
-        uniform float u_gltf_dof_perspective;
-        uniform float u_gltf_dof_scale;
         uniform vec3 u_gltf_dof_focus;
         uniform float u_gltf_exposure;
         uniform float u_gltf_tone_mapping;
@@ -1127,15 +1137,8 @@ init python:
         out vec2 v__uv;
     """ + _gltf_guard_variables, vertex_200="""
         v__uv = a_tex_coord;
-    """ + _gltf_guard_vertex, fragment_functions=_gltf_output_functions + """
-        float l__distance(vec2 uv) {
-            float depth = texture(u_gltf_scene_depth, uv).r;
-            vec4 point = u_gltf_dof_inverse * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-            float distance = u_gltf_dof_perspective > 0.5 ? abs(1.0 / point.w) : abs(point.z / point.w);
-            return distance * u_gltf_dof_scale;
-        }
-    """, fragment_200="""
-        float distance = l__distance(v__uv);
+    """ + _gltf_guard_vertex, fragment_functions=_gltf_output_functions, fragment_200="""
+        float distance = gltf_scene_distance(v__uv);
         float radius = clamp(abs(distance - u_gltf_dof_focus.x) / u_gltf_dof_focus.y, 0.0, 1.0)
             * u_gltf_dof_focus.z;
         vec4 color = texture(tex0, v__uv);
@@ -1145,7 +1148,7 @@ init python:
             float angle = float(i) * 2.39996323;
             vec2 offset = vec2(cos(angle), sin(angle)) * sqrt(float(i) / 16.0) * radius / res0;
             vec2 uv = clamp(v__uv + offset, 0.5 / res0, vec2(1.0) - 0.5 / res0);
-            float sample_distance = l__distance(uv);
+            float sample_distance = gltf_scene_distance(uv);
             if (sample_distance + u_gltf_dof_focus.y * 0.25 < distance) continue;
             color += texture(tex0, uv);
             weight += 1.0;

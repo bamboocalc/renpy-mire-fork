@@ -39,6 +39,15 @@ init python:
             meters_per_unit=0.01, depth_output=blur is not None, tone_mapping=tone_mapping)
         return GLTFDepthOfField(scene, max_blur=blur, focus_distance=6.0) if blur is not None else scene
 
+    renpy.register_shader("assimp_integration.distance", glsl=300, variables="""
+        in vec2 a_tex_coord;
+        out vec2 v__distance_uv;
+    """, vertex_200="""
+        v__distance_uv = a_tex_coord;
+    """, fragment_300="""
+        fragment_color = vec4(gltf_scene_distance(v__distance_uv) / 10.0, 0.0, 0.0, 1.0);
+    """)
+
     def assimp_camera__scene(camera="MainOrthographic", **settings):
         source = GLTFModel("models/scene-cameras.gltf", scene=True, zoom=100, **settings)
         return GLTFCamera(source, camera=camera)
@@ -1551,6 +1560,13 @@ testsuite assimp_integration:
         $ _integrated = assimp_integration__scene(blur=blur, glass=glass, tone_mapping=None)
         $ _integrated_pixel = assimp_alpha__pixels(_integrated, ((200, 150),))[0]
         assert eval assimp_alpha__close(_integrated_pixel, (64, 128, 191, 255))
+
+    testcase scene_distance:
+        description "A shader above a depth-output scene reads the baked plane's camera distance of 6 meters."
+
+        $ _integrated = Transform(assimp_integration__scene(blur=0, glass=False).child, shader="assimp_integration.distance")
+        $ _integrated_pixel = assimp_alpha__pixels(_integrated, ((200, 150),))[0]
+        assert eval abs(_integrated_pixel[0] - 153) <= 2
 
     testcase zero_blur:
         description "Disabling depth blur preserves the scene's ordinary tone-mapped output exactly."

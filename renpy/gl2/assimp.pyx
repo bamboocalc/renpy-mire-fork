@@ -2237,8 +2237,10 @@ class GLTFScene(Displayable):
         framing and coverage. Margins shrink to the GPU's texture limits.
 
     `depth_output`
-        Retain the scene's geometry depth for :class:`GLTFDepthOfField`.
-        The default False avoids its extra depth texture when not needed.
+        Retain the scene's geometry depth for :class:`GLTFDepthOfField`
+        and for shaders applied above the scene, which can call
+        ``gltf_scene_distance(uv)`` for the camera distance in meters. The
+        default False avoids its extra depth texture when not needed.
 
     `environment`
         An optional equirectangular sRGB image filename, image manipulator,
@@ -2526,9 +2528,13 @@ class GLTFScene(Displayable):
                 raise ValueError("GLTFScene depth output requires one shared camera projection.")
             scene.add_property("gltf_target", {"hdr": True, "depth_texture": True,
                 "gltf_depth_required": True, "mipmap": False, "drawable_resolution": coverage is None})
-            rv.add_property("gltf_depth_source", scene)
-            rv.add_property("gltf_depth_projection", projection)
-            rv.add_property("gltf_depth_scale", self.meters_per_unit)
+            rv.add_shader("renpy.gltf.scene_depth")
+            rv.add_uniform("u_gltf_scene_depth", scene)
+            rv.add_uniform("u_gltf_depth_inverse", projection.inverse())
+            rv.add_uniform("u_gltf_depth_perspective", float(abs(projection.wdz) > 0.000001))
+            rv.add_uniform("u_gltf_depth_scale", self.meters_per_unit)
+            rv.add_property("texture_wrap_gltf_scene_depth", (renpy.uguu.GL_CLAMP_TO_EDGE, renpy.uguu.GL_CLAMP_TO_EDGE))
+            rv.add_property("texture_scaling_gltf_scene_depth", (renpy.uguu.GL_NEAREST, renpy.uguu.GL_NEAREST))
         if profiler is not None:
             profiler.record("scene_prepare", time.perf_counter() - started)
         return rv
@@ -2545,6 +2551,7 @@ class GLTFScene(Displayable):
 
     def predict_shaders(self, shaders):
         output = ("renpy.gltf.output",) + (("renpy.gltf.guard",) if self.refraction_margin else ())
+        output += ("renpy.gltf.scene_depth",) if self.depth_output else ()
         renpy.gl2.gl2shadercache.predict_shader(shaders + output)
         inherited = ("renpy.gltf.cascades",) if self.shadow_cascades > 1 else ()
         if self.colored_shadows and self.shadows and self.transmission:
@@ -2608,27 +2615,25 @@ class GLTFDepthOfField(Displayable):
     _handles_event = GLTFScene._handles_event
 
     def render(self, width, height, st, at):
-        # Image references wrap their target's render, hiding the scene's depth properties.
+        # Image references wrap their target's render, hiding the scene's depth uniforms.
         source = renpy.display.render.render(self.child._target(), width, height, st, at)
-        properties = source.properties or {}
-        scene = properties.get("gltf_depth_source")
+        uniforms = source.uniforms or {}
+        scene = uniforms.get("u_gltf_scene_depth")
         if scene is None:
             raise ValueError("GLTFDepthOfField requires a GLTFScene with depth_output=True.")
-        projection = properties["gltf_depth_projection"]
         rv = Render(*source.get_size())
         rv.depends_on(source)
         rv.blit(scene, (0, 0))
         rv.mesh = True
         rv.add_shader("renpy.gltf.dof")
+        rv.add_shader("renpy.gltf.scene_depth")
         if "u_gltf_output_region" in source.uniforms:
             rv.add_shader("renpy.gltf.guard")
             rv.add_uniform("u_gltf_output_mask", source.uniforms["u_gltf_output_mask"])
             rv.add_uniform("u_gltf_output_region", source.uniforms["u_gltf_output_region"])
             rv.add_property("texture_scaling_gltf_output_mask", (renpy.uguu.GL_NEAREST, renpy.uguu.GL_NEAREST))
-        rv.add_uniform("u_gltf_scene_depth", scene)
-        rv.add_uniform("u_gltf_dof_inverse", projection.inverse())
-        rv.add_uniform("u_gltf_dof_perspective", float(abs(projection.wdz) > 0.000001))
-        rv.add_uniform("u_gltf_dof_scale", properties["gltf_depth_scale"])
+        for name in ("u_gltf_scene_depth", "u_gltf_depth_inverse", "u_gltf_depth_perspective", "u_gltf_depth_scale"):
+            rv.add_uniform(name, uniforms[name])
         rv.add_uniform("u_gltf_dof_focus", (self.focus_distance, self.focus_range, self.max_blur))
         rv.add_uniform("u_gltf_exposure", source.uniforms["u_gltf_exposure"])
         rv.add_uniform("u_gltf_tone_mapping", source.uniforms["u_gltf_tone_mapping"])
@@ -2642,10 +2647,10 @@ class GLTFDepthOfField(Displayable):
         return [self.child]
 
     def predict_shaders(self, shaders):
-        renpy.gl2.gl2shadercache.predict_shader(shaders + ("renpy.gltf.dof",))
+        renpy.gl2.gl2shadercache.predict_shader(shaders + ("renpy.gltf.dof", "renpy.gltf.scene_depth"))
         child = self.child._target()
         if getattr(child, "refraction_margin", 0):
-            renpy.gl2.gl2shadercache.predict_shader(shaders + ("renpy.gltf.dof", "renpy.gltf.guard"))
+            renpy.gl2.gl2shadercache.predict_shader(shaders + ("renpy.gltf.dof", "renpy.gltf.scene_depth", "renpy.gltf.guard"))
         return ()
 
 

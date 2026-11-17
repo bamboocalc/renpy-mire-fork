@@ -1188,6 +1188,26 @@ is an approximate defocus effect, not aperture ray tracing or full foreground
 bokeh. All meshes must share one camera projection. Keep UI outside the effect,
 and recreate the displayable to change its settings with save/rollback support.
 
+A scene with ``depth_output=True`` also offers its depth to shaders applied
+above it, for example through a :class:`Transform` ``shader``. Such a shader
+runs while the scene's output is drawn into its parent, so it can write
+``gl_FragDepth`` for other displayables there. It can call
+``gltf_scene_distance(uv)``, which returns the camera distance in meters at a
+scene texture coordinate, and read the scene's HDR color from ``tex0``::
+
+    init python:
+        renpy.register_shader("mygame.fog", glsl=300, variables="""
+            in vec2 a_tex_coord;
+            out vec2 v__fog_uv;
+        """, vertex_200="""
+            v__fog_uv = a_tex_coord;
+        """, fragment_300="""
+            float fog = clamp(gltf_scene_distance(v__fog_uv) / 20.0, 0.0, 1.0);
+            fragment_color.rgb = mix(fragment_color.rgb, vec3(0.6) * fragment_color.a, fog);
+        """)
+
+    image foggy_room = Transform(GLTFScene(_room_camera, depth_output=True), shader="mygame.fog")
+
 Scene controls and animation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

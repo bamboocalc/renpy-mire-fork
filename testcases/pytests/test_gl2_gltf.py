@@ -268,9 +268,10 @@ def test_depth_of_field_accepts_an_image_name(mocker):
     class Scene(renpy.display.displayable.Displayable):
         def render(self, width, height, st, at):
             rv = Render(4, 4)
-            rv.add_property("gltf_depth_source", depth)
-            rv.add_property("gltf_depth_projection", Matrix.scale(1, 1, 1))
-            rv.add_property("gltf_depth_scale", 1.0)
+            rv.add_uniform("u_gltf_scene_depth", depth)
+            rv.add_uniform("u_gltf_depth_inverse", Matrix.scale(1, 1, 1))
+            rv.add_uniform("u_gltf_depth_perspective", 0.0)
+            rv.add_uniform("u_gltf_depth_scale", 1.0)
             rv.add_uniform("u_gltf_exposure", 1.0)
             rv.add_uniform("u_gltf_tone_mapping", 0.0)
             return rv

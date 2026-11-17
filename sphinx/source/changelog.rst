@@ -81,7 +81,8 @@ cameras support authored projections and animated camera rigs.
 ``GLTFDepthOfField`` filters retained scene depth in HDR before tone mapping.
 The ``renpy.gltf.baked_srgb`` shader adapts existing baked color/depth-in-alpha
 shaders for composition with PBR glass, and ``GLTFScene(tone_mapping=None)``
-keeps their display values. Texture staging tools create independent
+keeps their display values. Shaders applied above a depth-output scene can read
+its camera distances. Texture staging tools create independent
 optimized asset copies, and disjoint smooth panes share refraction copies.
 
 ``GLTFModel(..., scene=True)`` preserves named scene nodes and materials for
