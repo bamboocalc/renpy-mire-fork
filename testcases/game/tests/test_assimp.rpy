@@ -27,7 +27,7 @@ init python:
         fragment_color = u_baked_test_color;
     """)
 
-    def assimp_integration__scene(blur=None, color=(0.25, 0.5, 0.75), glass=True):
+    def assimp_integration__scene(blur=None, color=(0.25, 0.5, 0.75), glass=True, tone_mapping="reinhard"):
         """Use only redistributable fixture geometry, with the same depth-in-alpha contract as a baked-room shader."""
         baked = Transform(GLTFModel("models/material-sided.gltf", zoom=100,
             shader=("assimp_baked.depth", "renpy.gltf.baked_srgb"), u_baked_test_color=(*color, 0.08)),
@@ -36,7 +36,7 @@ init python:
         if glass:
             children.append(assimp_pbr__plane(u_material_transmission_factor=1.0, u_material_ior=1.0))
         scene = GLTFScene(assimp_alpha__camera(*children), light_color=(0, 0, 0),
-            meters_per_unit=0.01, depth_output=blur is not None)
+            meters_per_unit=0.01, depth_output=blur is not None, tone_mapping=tone_mapping)
         return GLTFDepthOfField(scene, max_blur=blur, focus_distance=6.0) if blur is not None else scene
 
     def assimp_camera__scene(camera="MainOrthographic", **settings):
@@ -1542,6 +1542,15 @@ testsuite assimp_integration:
         $ _integrated_pixel = assimp_alpha__pixels(_integrated, ((200, 150),))[0]
         $ _integrated_linear = tuple(value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4 for value in (0.25, 0.5, 0.75))
         assert eval assimp_alpha__close(_integrated_pixel, assimp_pbr__expected(_integrated_linear))
+
+    testcase passthrough:
+        parameter glass = [False, True]
+        parameter blur = [None, 0.0, 8.0]
+        description "Without tone mapping, baked sRGB leaves the scene at its source display values, with or without DoF."
+
+        $ _integrated = assimp_integration__scene(blur=blur, glass=glass, tone_mapping=None)
+        $ _integrated_pixel = assimp_alpha__pixels(_integrated, ((200, 150),))[0]
+        assert eval assimp_alpha__close(_integrated_pixel, (64, 128, 191, 255))
 
     testcase zero_blur:
         description "Disabling depth blur preserves the scene's ordinary tone-mapped output exactly."

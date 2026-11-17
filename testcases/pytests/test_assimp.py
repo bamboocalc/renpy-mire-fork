@@ -758,6 +758,7 @@ def test_unknown_light_override_fails_even_without_imported_lights(standard_mode
         {"caustics": 1},
         {"lights": [object()]},
         {"import_lights": 1},
+        {"tone_mapping": "aces"},
     ],
 )
 def test_pbr_scene_rejects_invalid_lighting(options):

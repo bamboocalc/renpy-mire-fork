@@ -2267,6 +2267,12 @@ class GLTFScene(Displayable):
     `exposure`
         A nonnegative multiplier applied to the scene before tone mapping.
 
+    `tone_mapping`
+        ``"reinhard"`` compresses HDR color into display range. None clips
+        color at 1.0 instead, which passes display-referred input, such as
+        models drawn with ``renpy.gltf.baked_srgb``, through unchanged. The
+        default is ``"reinhard"``.
+
     Supported on desktop only. Requires OpenGL 3.0 and half-float color attachments.
     Unsupported renderers raise an error rather than silently clipping HDR.
     """
@@ -2291,6 +2297,7 @@ class GLTFScene(Displayable):
     environment_fallback = None
     reflection_probes = ()
     reflection_models = ()
+    tone_mapping = "reinhard"
 
     def __init__(self, child, *, light_direction=(0, -1, 1), light_color=(3, 3, 3),
                  environment=None, environment_intensity=1.0, environment_rotation=0.0, exposure=1.0,
@@ -2298,7 +2305,7 @@ class GLTFScene(Displayable):
                  shadow_size=512, shadow_bias=0.0005, transmission=True, shadow_cache=True,
                  refraction_batch=True, depth_output=False, environment_quality="low", reflection_probes=(),
                  transparency_layers=0, refraction_margin=0.0, shadow_cascades=1, shadow_distance=50.0,
-                 colored_shadows=False, caustics=False, **properties):
+                 colored_shadows=False, caustics=False, tone_mapping="reinhard", **properties):
         super().__init__(**properties)
         self.child = renpy.easy.displayable(child)
         self._duplicatable = self.child._duplicatable
@@ -2349,6 +2356,9 @@ class GLTFScene(Displayable):
             (environment_intensity, environment_rotation, exposure), 3, "environment/exposure")
         if min(*self.light_color, self.environment_intensity, self.exposure) < 0:
             raise ValueError("Light color, environment intensity, and exposure must be nonnegative.")
+        if tone_mapping not in ("reinhard", None):
+            raise ValueError("tone_mapping must be \"reinhard\" or None.")
+        self.tone_mapping = tone_mapping
 
         self.environment_quality = environment_quality
         if environment_quality not in ("low", "medium", "high"):
@@ -2501,6 +2511,7 @@ class GLTFScene(Displayable):
             rv.add_uniform("u_gltf_output_region", region)
             rv.add_property("texture_scaling_gltf_output_mask", (renpy.uguu.GL_NEAREST, renpy.uguu.GL_NEAREST))
         rv.add_uniform("u_gltf_exposure", self.exposure)
+        rv.add_uniform("u_gltf_tone_mapping", float(self.tone_mapping == "reinhard"))
         rv.add_property("hdr", True)
         rv.add_property("mipmap", False)
         if refractive:
@@ -2620,6 +2631,7 @@ class GLTFDepthOfField(Displayable):
         rv.add_uniform("u_gltf_dof_scale", properties["gltf_depth_scale"])
         rv.add_uniform("u_gltf_dof_focus", (self.focus_distance, self.focus_range, self.max_blur))
         rv.add_uniform("u_gltf_exposure", source.uniforms["u_gltf_exposure"])
+        rv.add_uniform("u_gltf_tone_mapping", source.uniforms["u_gltf_tone_mapping"])
         rv.add_property("texture_wrap_gltf_scene_depth", (renpy.uguu.GL_CLAMP_TO_EDGE, renpy.uguu.GL_CLAMP_TO_EDGE))
         rv.add_property("texture_scaling_gltf_scene_depth", (renpy.uguu.GL_NEAREST, renpy.uguu.GL_NEAREST))
         rv.add_property("gltf_pass", "depth_of_field")

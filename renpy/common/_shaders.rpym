@@ -1070,10 +1070,11 @@ init python:
     """)
 
     _gltf_output_functions = """
-        vec4 gltf_scene_output(vec4 color, float exposure) {
+        vec4 gltf_scene_output(vec4 color, float exposure, float tone_mapping) {
             vec3 linear_rgb = max(color.rgb / max(color.a, 0.00001), vec3(0.0)) * exposure;
             linear_rgb = min(linear_rgb, vec3(1.0e20));
-            linear_rgb /= vec3(1.0) + linear_rgb;
+            // Without tone mapping, display-referred input such as decoded baked sRGB is only clipped.
+            linear_rgb = tone_mapping > 0.5 ? linear_rgb / (vec3(1.0) + linear_rgb) : min(linear_rgb, vec3(1.0));
             vec3 srgb = mix(12.92 * linear_rgb,
                 1.055 * pow(linear_rgb, vec3(1.0 / 2.4)) - 0.055,
                 step(vec3(0.0031308), linear_rgb));
@@ -1121,6 +1122,7 @@ init python:
         uniform float u_gltf_dof_scale;
         uniform vec3 u_gltf_dof_focus;
         uniform float u_gltf_exposure;
+        uniform float u_gltf_tone_mapping;
         in vec2 a_tex_coord;
         out vec2 v__uv;
     """ + _gltf_guard_variables, vertex_200="""
@@ -1148,19 +1150,20 @@ init python:
             color += texture(tex0, uv);
             weight += 1.0;
         }
-        fragment_color = gltf_scene_output(color / weight, u_gltf_exposure);
+        fragment_color = gltf_scene_output(color / weight, u_gltf_exposure, u_gltf_tone_mapping);
     """ + _gltf_guard_fragment)
 
     renpy.register_shader("renpy.gltf.output", glsl=300, variables="""
         uniform sampler2D tex0;
         uniform float u_gltf_exposure;
+        uniform float u_gltf_tone_mapping;
         in vec2 a_tex_coord;
         out vec2 v__uv;
     """ + _gltf_guard_variables, vertex_200="""
         v__uv = a_tex_coord;
     """ + _gltf_guard_vertex, fragment_functions=_gltf_output_functions, fragment_200="""
         vec4 color = texture(tex0, v__uv);
-        fragment_color = gltf_scene_output(color, u_gltf_exposure);
+        fragment_color = gltf_scene_output(color, u_gltf_exposure, u_gltf_tone_mapping);
     """ + _gltf_guard_fragment)
 
     renpy.register_shader("renpy.blur", glsl = 300, variables = """

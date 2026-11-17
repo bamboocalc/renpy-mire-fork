@@ -1164,6 +1164,14 @@ inside ``GLTFScene``. The baked geometry still writes actual GPU depth, so PBR
 glass in the same camera can refract it. The adapter does not convert custom
 texture slots into standard materials or add dynamic lighting to a bake.
 
+The scene's Reinhard tone mapping darkens and desaturates a bake that was
+already display-referred. ``GLTFScene(..., tone_mapping=None)`` clips linear
+color at 1.0 and encodes it as sRGB, so baked models drawn without lights or
+exposure changes keep their original values::
+
+    image baked_room = GLTFScene(_room_camera, light_color=(0, 0, 0),
+        import_lights=False, shadows=False, tone_mapping=None)
+
 For depth of field, enable ``GLTFScene(..., depth_output=True)`` and wrap it in
 ``GLTFDepthOfField``. Focus distance and range use meters, through the scene's
 ``meters_per_unit``. For example::

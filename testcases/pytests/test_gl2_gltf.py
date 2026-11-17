@@ -220,7 +220,7 @@ def test_old_scene_shape_uses_compatibility_defaults():
     scene = assimp.GLTFScene(renpy.display.layout.Null())
     for name in ("lights", "import_lights", "meters_per_unit", "shadows", "shadow_size", "shadow_bias", "transmission",
                  "shadow_cache", "depth_output", "refraction_batch", "transparency_layers", "refraction_margin",
-                 "shadow_cascades", "shadow_distance", "colored_shadows", "caustics"):
+                 "shadow_cascades", "shadow_distance", "colored_shadows", "caustics", "tone_mapping"):
         delattr(scene, name)
     restored = pickle.loads(pickle.dumps(scene))
     assert not restored.import_lights and not restored.shadows and not restored.transmission
@@ -231,6 +231,7 @@ def test_old_scene_shape_uses_compatibility_defaults():
     assert restored.shadow_cascades == 1 and restored.shadow_distance == 50
     assert not restored.colored_shadows
     assert not restored.caustics
+    assert restored.tone_mapping == "reinhard"
 
 
 def test_scene_and_light_options_survive_pickling():
@@ -238,8 +239,9 @@ def test_scene_and_light_options_survive_pickling():
     scene = assimp.GLTFScene(renpy.display.layout.Null(),
         lights=(gltf.GLTFLight("spot", position=(2, 3, 4), intensity=8, range=10),),
         meters_per_unit=0.01, shadow_size=256, shadow_bias=0.001, shadow_cache=False,
-        shadow_cascades=4, shadow_distance=25, caustics=True)
+        shadow_cascades=4, shadow_distance=25, caustics=True, tone_mapping=None)
     restored = pickle.loads(pickle.dumps(scene))
+    assert restored.tone_mapping is None
     assert restored.shadows and restored.transmission and restored.import_lights
     assert not restored.shadow_cache
     assert restored.shadow_cascades == 4 and restored.shadow_distance == 25
@@ -270,6 +272,7 @@ def test_depth_of_field_accepts_an_image_name(mocker):
             rv.add_property("gltf_depth_projection", Matrix.scale(1, 1, 1))
             rv.add_property("gltf_depth_scale", 1.0)
             rv.add_uniform("u_gltf_exposure", 1.0)
+            rv.add_uniform("u_gltf_tone_mapping", 0.0)
             return rv
 
     plain = lambda d, width, height, st, at: d.render(width, height, st, at)
@@ -278,6 +281,7 @@ def test_depth_of_field_accepts_an_image_name(mocker):
     mocker.patch.dict(renpy.display.image.images, {("dof_room",): Scene()})
     rv = assimp.GLTFDepthOfField("dof_room").render(4, 4, 0, 0)
     assert rv.uniforms["u_gltf_scene_depth"] is depth
+    assert rv.uniforms["u_gltf_tone_mapping"] == 0.0
 
 
 def test_camera_selection_and_shared_source_survive_pickling():
