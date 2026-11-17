@@ -86,6 +86,10 @@ IDENTITY = renpy.display.render.IDENTITY
 # Should we try to vsync?
 vsync = True
 
+# Oversamples that differ by less than this share a render's cached texture. At this size, the
+# textures differ by about a pixel in every thousand.
+cdef double OVERSAMPLE_TOLERANCE = 0.001
+
 cdef GLenum CONTEXT_PROFILE_MASK = 0x9126
 cdef GLint CONTEXT_CORE_PROFILE_BIT = 0x00000001
 
@@ -1450,30 +1454,6 @@ cdef class GL2Draw:
             if (r.mesh is True) and (not r.children):
                 return
 
-            if not r.uniforms:
-                uniforms = None
-
-            elif r.uniforms_has_render:
-
-                uniforms = dict()
-
-                for k, v in r.uniforms.items():
-                    if isinstance(v, Render):
-                        self.load_all_textures(v, reverse)
-                        uniforms[k] = ctex = self.render_to_texture(v, properties=r.properties)
-                        uniforms.setdefault(k + "_res", (ctex.texture_width, ctex.texture_height))
-                        uniforms.setdefault(k + "_OP_virtual_size", (v.width, v.height))
-                    else:
-                        uniforms[k] = v
-            else:
-                uniforms = r.uniforms
-
-            model = r.cached_model = GL2Model(
-                (r.width, r.height),
-                None,
-                r.shaders,
-                uniforms)
-
             # Projects a unit vector with the divide by w, since a perspective camera scales the raw point by its z11.
             ox, oy, oz, ow = reverse.transform(0, 0, 0, 1, 4)
             tx, ty, tz, tw = reverse.transform(1, 1, 0, 1, 4)
@@ -1488,8 +1468,42 @@ cdef class GL2Draw:
 
             oversample = max(1.0, min(oversample, renpy.config.mesh_oversample))
 
-            for i, c in enumerate(r.children):
-                model.set_texture(i, self.render_to_texture(c[0], properties=r.properties, oversample=oversample))
+            if (r.properties is not None) and not r.properties.get("mesh_oversample", True):
+                oversample = 1.0
+
+            # The children are rendered before the uniforms, so a render that is both a child
+            # and a uniform shares the child's oversampled texture.
+            textures = [
+                self.render_to_texture(c[0], properties=r.properties, oversample=oversample)
+                for c in r.children
+            ]
+
+            if not r.uniforms:
+                uniforms = None
+
+            elif r.uniforms_has_render:
+
+                uniforms = dict()
+
+                for k, v in r.uniforms.items():
+                    if isinstance(v, Render):
+                        self.load_all_textures(v, reverse)
+                        uniforms[k] = ctex = self.render_to_texture(v, properties=r.properties, oversample=None)
+                        uniforms.setdefault(k + "_res", (ctex.texture_width, ctex.texture_height))
+                        uniforms.setdefault(k + "_OP_virtual_size", (v.width, v.height))
+                    else:
+                        uniforms[k] = v
+            else:
+                uniforms = r.uniforms
+
+            model = r.cached_model = GL2Model(
+                (r.width, r.height),
+                None,
+                r.shaders,
+                uniforms)
+
+            for i, texture in enumerate(textures):
+                model.set_texture(i, texture)
 
             if r.mesh is True:
                 tex = model.get_texture(0)
@@ -1509,12 +1523,21 @@ cdef class GL2Draw:
             for v in r.uniforms.values():
                 if isinstance(v, Render):
                     self.load_all_textures(v, reverse)
-                    self.render_to_texture(v, properties=r.properties)
+                    self.render_to_texture(v, properties=r.properties, oversample=None)
 
     def render_to_texture(self, what, alpha=True, properties={}, oversample=1.0):
         """
         Renders `what` to a texture. The texture will have the drawable
-        size of `what`.
+        size of `what`, multiplied by `oversample`.
+
+        The texture is cached on `what`, and returned again when the same oversample,
+        within OVERSAMPLE_TOLERANCE, is requested. A request for a different oversample
+        renders `what` again, and the new texture replaces the cached one.
+
+        If `oversample` is None, a cached texture is returned whatever its oversample,
+        and `what` is rendered without oversampling if there isn't one. This is used for
+        renders passed as uniforms, so a render that is also the child of a mesh shares
+        the mesh's texture.
         """
 
         if isinstance(what, Render) and what.properties and "gltf_target" in what.properties:
@@ -1537,10 +1560,27 @@ cdef class GL2Draw:
                 what.add_mipmap()
             return what
 
-        if what.cached_texture is not None:
-            if need_mipmap:
-                what.cached_texture.add_mipmap()
-            return what.cached_texture
+        cached = what.cached_texture
+
+        if cached is not None:
+
+            # A texture that wasn't rendered from `what`, like a loaded image, has no oversample
+            # and is always used. (This may also be a Render, for an image loaded as tiles.)
+            cached_oversample = getattr(cached, "render_oversample", None)
+
+            # The oversample is computed from single-precision matrices, so it varies slightly
+            # between frames when the mesh rotates. Treat nearly equal values as the same.
+            if (
+                (oversample is None)
+                or (cached_oversample is None)
+                or (abs(cached_oversample - oversample) < OVERSAMPLE_TOLERANCE)
+            ):
+                if need_mipmap:
+                    cached.add_mipmap()
+                return cached
+
+        if oversample is None:
+            oversample = 1.0
 
         rv = self.texture_loader.render_to_texture(what, properties, oversample)
         what.cached_texture = rv

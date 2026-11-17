@@ -346,6 +346,9 @@ cdef class GLTexture(GL2Model):
         # Used for loading surfaces.
         self.surface = None
 
+        # The oversample this was rendered at, when created by from_render.
+        self.render_oversample = None
+
         # Update the loader.
         self.loader = loader
 
@@ -588,6 +591,8 @@ cdef class GLTexture(GL2Model):
 
         if self.properties["hdr"] and not self.loader.hdr_targets:
             raise RuntimeError("GLTFScene requires renderable half-float HDR textures on this renderer.")
+
+        self.render_oversample = oversample
 
         cw, ch = size = what.get_size()
 

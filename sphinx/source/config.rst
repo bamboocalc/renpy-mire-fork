@@ -424,6 +424,8 @@ Display
     :var:`config.script_version` of 8.5 or earlier use 1.0. The ``gl_mesh_oversample_scale``
     property changes this for one mesh.
 
+    Meshes created by the :tpref:`blur` transform property are never oversampled.
+
 .. var:: config.minimum_presplash_time = 0.0
 
     The minimum amount of time, in seconds, a presplash, Android presplash,
