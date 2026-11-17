@@ -27,14 +27,15 @@ init python:
         fragment_color = u_baked_test_color;
     """)
 
-    def assimp_integration__scene(blur=None, color=(0.25, 0.5, 0.75), glass=True, tone_mapping="reinhard"):
+    def assimp_integration__scene(blur=None, color=(0.25, 0.5, 0.75), glass=True, tone_mapping="reinhard", glass_blend=False):
         """Use only redistributable fixture geometry, with the same depth-in-alpha contract as a baked-room shader."""
         baked = Transform(GLTFModel("models/material-sided.gltf", zoom=100,
             shader=("assimp_baked.depth", "renpy.gltf.baked_srgb"), u_baked_test_color=(*color, 0.08)),
             xpos=200, ypos=150, zpos=-100)
         children = [baked]
         if glass:
-            children.append(assimp_pbr__plane(u_material_transmission_factor=1.0, u_material_ior=1.0))
+            blend = {"u_material_gltf_alphamode": 2.0} if glass_blend else {}
+            children.append(assimp_pbr__plane(u_material_transmission_factor=1.0, u_material_ior=1.0, **blend))
         scene = GLTFScene(assimp_alpha__camera(*children), light_color=(0, 0, 0),
             meters_per_unit=0.01, depth_output=blur is not None, tone_mapping=tone_mapping)
         return GLTFDepthOfField(scene, max_blur=blur, focus_distance=6.0) if blur is not None else scene
@@ -1567,6 +1568,21 @@ testsuite assimp_integration:
         $ _integrated = Transform(assimp_integration__scene(blur=0, glass=False).child, shader="assimp_integration.distance")
         $ _integrated_pixel = assimp_alpha__pixels(_integrated, ((200, 150),))[0]
         assert eval abs(_integrated_pixel[0] - 153) <= 2
+
+    testcase glass_distance:
+        parameter blend = [False, True]
+        description "Opaque-mode glass reports its own 5 meter distance, while blend-mode glass leaves the 6 meter plane's."
+
+        $ _integrated = Transform(assimp_integration__scene(blur=0, glass_blend=blend).child, shader="assimp_integration.distance")
+        $ _integrated_pixel = assimp_alpha__pixels(_integrated, ((200, 150),))[0]
+        assert eval abs(_integrated_pixel[0] - (153 if blend else 127)) <= 2
+
+    testcase blended_glass_passthrough:
+        description "Blend-mode glass still transmits the baked plane's source display values."
+
+        $ _integrated = assimp_integration__scene(glass_blend=True, tone_mapping=None)
+        $ _integrated_pixel = assimp_alpha__pixels(_integrated, ((200, 150),))[0]
+        assert eval assimp_alpha__close(_integrated_pixel, (64, 128, 191, 255))
 
     testcase zero_blur:
         description "Disabling depth blur preserves the scene's ordinary tone-mapped output exactly."
