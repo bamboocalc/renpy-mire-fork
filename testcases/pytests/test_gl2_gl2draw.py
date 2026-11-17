@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 import renpy
-from renpy.display.matrix import MatrixStack
+from renpy.display.matrix import Matrix, MatrixStack
 from renpy.display.render import Render
 from renpy.gl2.gl2draw import GL2Draw
 from renpy.gl2.gl2model import GL2Model
@@ -267,11 +267,13 @@ def test_render_to_texture_without_oversample_shares_cached_texture(texture_draw
     assert texture_draw.render_to_texture(Render(100, 50), oversample=None).render_oversample == 1.0
 
 
-def test_render_used_as_child_and_uniform_shares_texture(mocker, texture_draw):
+@pytest.mark.parametrize("perspective", [False, True])
+@pytest.mark.parametrize("mesh_oversample, expected", [(True, 2.0), (False, 1.0)])
+def test_render_used_as_child_and_uniform_shares_texture(mocker, texture_draw, perspective, mesh_oversample, expected):
     """
-    When a mesh drawn at twice its size uses one render as both its child and a uniform, the
-    uniform gets the same oversampled texture as the child, so a shader sampling both sees the
-    same pixels.
+    A mesh's child and uniform share a texture at the requested scale, including under a perspective
+    camera. The camera's homogeneous scale must not inflate the texture, and blurred meshes must
+    still disable oversampling.
     """
 
     mocker.patch.object(renpy.config, "mesh_oversample", 8.0)
@@ -280,11 +282,15 @@ def test_render_used_as_child_and_uniform_shares_texture(mocker, texture_draw):
     render = Render(100, 50)
     render.blit(child, (0, 0))
     render.mesh = True
+    render.add_property("mesh_oversample", mesh_oversample)
     render.add_uniform("u_other", child)
+
+    if perspective:
+        render.reverse = Matrix.perspective(100, 50, 1, 700, 10000)
 
     texture_draw.load_all_textures(render, MatrixStack([2, 0, 0, 2]))
 
     model = render.cached_model
 
-    assert model.get_texture(0).render_oversample == 2.0
+    assert model.get_texture(0).render_oversample == expected
     assert model.uniforms["u_other"] is model.get_texture(0)
