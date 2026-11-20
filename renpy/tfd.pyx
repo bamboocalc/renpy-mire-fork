@@ -85,8 +85,12 @@ cdef const char *cstr_or_null(s):
 encoded_filters = [ ]
 cdef const char *encoded_filter_array[32]
 
-cdef const char **filter_array(l):
+cdef const char **filter_array(l) except NULL:
     global encoded_filters
+
+    if len(l) > 32:
+        raise ValueError("At most 32 file filters are supported.")
+
     encoded_filters = [ i.encode("utf-8") for i in l ]
 
     for i, b in enumerate(encoded_filters):

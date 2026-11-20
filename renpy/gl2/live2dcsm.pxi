@@ -111,8 +111,6 @@ def load(dll):
     if did_load:
         return True
 
-    did_load = True
-
     cdef void *object = NULL
 
     if dll:
@@ -299,5 +297,8 @@ def load(dll):
         raise Exception("csmResetDrawableDynamicFlags not found in Live2D dll " + dll.decode() + ". (The dll could be an old version.)")
 
     post_init()
+
+    # Set last, so a failed load is retried instead of leaving null function pointers.
+    did_load = True
 
     return True

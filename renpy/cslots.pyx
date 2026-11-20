@@ -202,7 +202,7 @@ cdef class CObject:
         self.value_count = cslot_count
 
     def __sizeof__(self):
-        return sizeof(CObject) + self.value_count * sizeof(Value) + self.index_count & INDEX_COUNT_MASK
+        return sizeof(CObject) + self.value_count * sizeof(Value) + (self.index_count & INDEX_COUNT_MASK)
 
     def __reduce_ex__(self, protocol):
 

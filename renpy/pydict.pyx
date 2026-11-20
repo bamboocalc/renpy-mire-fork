@@ -127,7 +127,7 @@ cdef class DictItems(object):
         return rv
 
 
-def find_changes(DictItems old, DictItems new, object deleted):
+def find_changes(DictItems old not None, DictItems new not None, object deleted):
 
     cdef oi = 0
     cdef ni = 0
