@@ -59,8 +59,8 @@ def PPP(event, *args):
         level = event
         event = args[0]
         args = args[1:]
-
-    level = 3
+    else:
+        level = 3
 
     log(level, event, *args)
 

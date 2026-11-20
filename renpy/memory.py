@@ -538,10 +538,10 @@ def find_parents(cls):
                 o, prefix = queue.pop()
                 continue
 
-            if isinstance(o, weakref.WeakKeyDictionary):
+            # Items yields the keys themselves, not weak references.
+            if isinstance(o, weakref.WeakKeyDictionary) and len(objects) >= 4:
                 for k, v in o.items():
                     if v is objects[-4]:
-                        k = k()
                         seen.add(id(k))
                         queue.append((k, prefix + " (key) "))
 

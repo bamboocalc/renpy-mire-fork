@@ -57,3 +57,19 @@ def test_desktop_window_and_images_are_released(mocker) -> None:
     assert presplash.window is None
     assert presplash.progress_bar is None
     assert presplash.done
+
+
+def test_progress_bar_reveals_a_smaller_foreground() -> None:
+    """A foreground smaller than the background asked for a subsurface outside it, crashing the presplash."""
+
+    bar = presplash.ProgressBar.__new__(presplash.ProgressBar)
+    bar.background = renpy.pygame.Surface((200, 40))
+    bar.foreground = renpy.pygame.Surface((100, 20))
+    bar.foreground.fill((255, 0, 0))
+    bar.width, bar.height = bar.background.get_size()
+    target = renpy.pygame.Surface((200, 40))
+
+    bar.draw(target, 0.5)
+
+    assert target.get_at((49, 19))[:3] == (255, 0, 0)
+    assert target.get_at((50, 19))[:3] == (0, 0, 0)

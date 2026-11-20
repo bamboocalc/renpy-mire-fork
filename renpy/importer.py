@@ -63,7 +63,7 @@ class RenpyPath(importlib.resources.abc.Traversable):
 
     def iterdir(self):
         if not isinstance(self.tree, dict):
-            return NotADirectoryError(f"Not a directory: {self.path}")
+            raise NotADirectoryError(f"Not a directory: {self.path}")
 
         for name, entry in self.tree.items():
             yield RenpyPath(self.path + "/" + name, entry)
@@ -125,15 +125,17 @@ class RenpyResourceReader(importlib.resources.abc.TraversableResources):
         Returns a Traversable object representing the resource.
         """
 
-        if not self.path.startswith("$game/"):
+        # A module at the top of the game directory has "$game" as its package directory.
+        if self.path != "$game" and not self.path.startswith("$game/"):
             return pathlib.Path(self.path)
 
         path = self.path[6:]
 
         rv = RenpyPath("", renpy.loader.tree)  # type:ignore[reportAbstractUsage]
 
-        for i in path.strip("/").split("/"):
-            rv = rv / i
+        for i in path.split("/"):
+            if i:
+                rv = rv / i
 
         return rv
 

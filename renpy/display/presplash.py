@@ -65,8 +65,10 @@ class ProgressBar(object):
         return self.background.get_at(pos)
 
     def draw(self, target, done):
-        width = self.width * min(done, 1)
-        foreground = self.foreground.subsurface(0, 0, width, self.height)
+        # The foreground may be smaller than the background.
+        fw, fh = self.foreground.get_size()
+        width = min(self.width, fw) * min(done, 1)
+        foreground = self.foreground.subsurface(0, 0, width, min(self.height, fh))
         target.blit(self.background, (0, 0))
         target.blit(foreground, (0, 0))
 
