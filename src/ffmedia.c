@@ -621,6 +621,7 @@ static AVPacket *read_packet(MediaState *ms, PacketQueue *pq) {
 		}
 
 		if (av_read_frame(ms->ctx, pkt)) {
+			av_packet_free(&pkt);
 			return NULL;
 		}
 
@@ -713,7 +714,11 @@ static AVCodecContext *find_context(AVFormatContext *ctx, int index) {
     av_dict_set(&opts, "threads", "auto", 0);
     av_dict_set(&opts, "refcounted_frames", "0", 0);
 
-	if (avcodec_open2(codec_ctx, codec, &opts)) {
+	/* avcodec_open2 leaves unrecognized options, such as refcounted_frames, in the dictionary. */
+	int err = avcodec_open2(codec_ctx, codec, &opts);
+	av_dict_free(&opts);
+
+	if (err) {
 		goto fail;
 	}
 
@@ -1071,41 +1076,40 @@ static SurfaceQueueEntry *decode_video_frame(MediaState *ms) {
 
 	SDL_Surface *sample = rgba_surface;
 
-	if (ms->sws == NULL) {
-		ms->sws = sws_getContext(
-			ms->video_decode_frame->width,
-			ms->video_decode_frame->height,
-			ms->video_decode_frame->format,
+	/* A stream can change frame size; a stale context would scale past the new frame's buffers. */
+	ms->sws = sws_getCachedContext(
+		ms->sws,
+		ms->video_decode_frame->width,
+		ms->video_decode_frame->height,
+		ms->video_decode_frame->format,
 
-			ms->video_decode_frame->width,
-			ms->video_decode_frame->height,
-			get_pixel_format(sample),
+		ms->video_decode_frame->width,
+		ms->video_decode_frame->height,
+		get_pixel_format(sample),
 
-			SWS_POINT | SWS_FULL_CHR_H_INP | SWS_FULL_CHR_H_INT,
+		SWS_POINT | SWS_FULL_CHR_H_INP | SWS_FULL_CHR_H_INT,
 
-			NULL,
-			NULL,
-			NULL
-			);
+		NULL,
+		NULL,
+		NULL
+		);
 
-
-		if (!ms->sws) {
-			ms->video_finished = 1;
-			return NULL;
-		}
-
-		int colorspace = ms->video_decode_frame->colorspace;
-		if (colorspace == AVCOL_SPC_UNSPECIFIED) {
-			colorspace = SWS_CS_DEFAULT;
-		}
-
-		int src_range = (ms->video_decode_frame->color_range == AVCOL_RANGE_JPEG) ? 1 : 0;
-
-		sws_setColorspaceDetails(ms->sws,
-			sws_getCoefficients(colorspace), src_range,
-			sws_getCoefficients(SWS_CS_DEFAULT), 0,
-			0, 1 << 16, 1 << 16);
+	if (!ms->sws) {
+		ms->video_finished = 1;
+		return NULL;
 	}
+
+	int colorspace = ms->video_decode_frame->colorspace;
+	if (colorspace == AVCOL_SPC_UNSPECIFIED) {
+		colorspace = SWS_CS_DEFAULT;
+	}
+
+	int src_range = (ms->video_decode_frame->color_range == AVCOL_RANGE_JPEG) ? 1 : 0;
+
+	sws_setColorspaceDetails(ms->sws,
+		sws_getCoefficients(colorspace), src_range,
+		sws_getCoefficients(SWS_CS_DEFAULT), 0,
+		0, 1 << 16, 1 << 16);
 
 	SurfaceQueueEntry *rv = av_malloc(sizeof(SurfaceQueueEntry));
 	if (rv == NULL) {
@@ -1495,9 +1499,13 @@ done:
 			sqe->pitch
 		);
 
-		/* Force SDL to take over management of pixels. */
-		rv->flags &= ~SDL_SURFACE_PREALLOCATED;
-		av_free(sqe);
+		if (rv) {
+			/* Force SDL to take over management of pixels. */
+			rv->flags &= ~SDL_SURFACE_PREALLOCATED;
+			av_free(sqe);
+		} else {
+			free_surface_entry(sqe);
+		}
 	}
 
 	return rv;
@@ -1525,6 +1533,9 @@ static int decode_thread(void *arg) {
 	if (err) {
 		avformat_free_context(ctx);
 		ms->ctx = NULL;
+		/* FFmpeg frees the context on failure, but a custom I/O context stays ours. */
+		av_freep(&io_context->buffer);
+		avio_context_free(&io_context);
 		goto finish;
 	}
 
@@ -1677,27 +1688,10 @@ finish:
 
 
 void media_read_sync_finish(struct MediaState *ms) {
-	// copy/paste from end of decode_thread
-
-	/* Data used by the decoder should be freed here, while data shared with
-	 * the readers should be freed in media_close.
-	 */
-
-	SDL_LockMutex(ms->lock);
-
-	/* Ensures that every stream becomes ready. */
-	if (!ms->ready) {
-		ms->ready = 1;
-		SDL_BroadcastCondition(ms->cond);
-	}
-
-	while (!ms->quit) {
-		/* SDL_WaitCondition(ms->cond, ms->lock); */
-	}
-
-	SDL_UnlockMutex(ms->lock);
-
-	deallocate(ms);
+	/* Without a decode thread nothing can set quit, so waiting would hang; media_close deallocates. */
+	ms->audio_finished = 1;
+	ms->video_finished = 1;
+	ms->ready = 1;
 }
 
 
@@ -1710,12 +1704,14 @@ static int decode_sync_start(void *arg) {
 	AVFormatContext *ctx = avformat_alloc_context();
 	if (ctx == NULL) {
 		media_read_sync_finish(ms);
+		return 0;
 	}
 	ms->ctx = ctx;
 
 	AVIOContext *io_context = rwops_open(ms->rwops);
 	if (io_context == NULL) {
 		media_read_sync_finish(ms);
+		return 0;
 	}
 	ctx->pb = io_context;
 
@@ -1724,11 +1720,13 @@ static int decode_sync_start(void *arg) {
 		avformat_free_context(ctx);
 		ms->ctx = NULL;
 		media_read_sync_finish(ms);
+		return 0;
 	}
 
 	err = avformat_find_stream_info(ctx, NULL);
 	if (err) {
 		media_read_sync_finish(ms);
+		return 0;
 	}
 
 
@@ -1755,6 +1753,7 @@ static int decode_sync_start(void *arg) {
 	ms->swr = swr_alloc();
 	if (ms->swr == NULL) {
 		media_read_sync_finish(ms);
+		return 0;
 	}
 
 	// Compute the number of samples we need to play back.
@@ -1834,7 +1833,8 @@ int media_read_audio(struct MediaState *ms, Uint8 *stream, int len) {
 
 	SDL_LockMutex(ms->lock);
 
-    if(!ms->ready) {
+	/* Pre-seek data would end a stream the decoder is about to rewind. */
+    if(!ms->ready || ms->seek_requested) {
 	    SDL_UnlockMutex(ms->lock);
 	    memset(stream, 0, len);
 	    return len;
@@ -1905,17 +1905,20 @@ int media_read_audio(struct MediaState *ms, Uint8 *stream, int len) {
 		SDL_BroadcastCondition(ms->cond);
 	}
 
-	SDL_UnlockMutex(ms->lock);
-
+	/* A seek on the decode thread resets these counters under the lock. */
 	if (ms->audio_duration >= 0) {
 		if ((ms->audio_duration - ms->audio_read_samples) * BPS < len) {
 			len = (ms->audio_duration - ms->audio_read_samples) * BPS;
 		}
 
-		memset(stream, 0, len);
-		ms->audio_read_samples += len / BPS;
-		rv += len;
+		if (len > 0) {
+			memset(stream, 0, len);
+			ms->audio_read_samples += len / BPS;
+			rv += len;
+		}
 	}
+
+	SDL_UnlockMutex(ms->lock);
 
 	return rv;
 }

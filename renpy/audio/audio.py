@@ -790,6 +790,10 @@ class Channel(object):
             for q in self.queue:
                 q.audio_filter = new_audio_filter
 
+            # Without audio the sample rate is 0, which filters cannot prepare for.
+            if not pcm_ok:
+                return
+
             if replace:
                 renpysound.replace_audio_filter(self.number, new_audio_filter, 1)
             else:
@@ -926,13 +930,16 @@ class Channel(object):
         if not pcm_ok:
             return None
 
-        return renpysound.read_video(self.number)
+        # The read releases the GIL; the lock keeps the periodic thread from freeing the stream.
+        with lock:
+            return renpysound.read_video(self.number)
 
     def read_video_yuv(self):
         if not pcm_ok:
             return None
 
-        return renpysound.read_video_yuv(self.number)
+        with lock:
+            return renpysound.read_video_yuv(self.number)
 
     def video_ready(self):
         if not pcm_ok:

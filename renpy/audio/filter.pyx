@@ -792,6 +792,11 @@ cdef class DelayBuffer:
             if len(delay) != subchannels:
                 raise ValueError("Delay must be a single value or a list of values with the same length as the number of subchannels.")
 
+        # A negative write index or an empty ring would index outside the buffer in nogil code.
+        if min(delay) < 0:
+            raise ValueError("Delays must not be negative.")
+        if sample_rate <= 0:
+            raise ValueError("The sample rate must be positive.")
 
         samples = int((max(delay) + 1) * sample_rate)
         self.length = samples

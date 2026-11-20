@@ -22,8 +22,12 @@
 
 """Tests for parsing partial-playback audio specs such as ``<loop 1.0>music.ogg``."""
 
+from types import SimpleNamespace
+
 import pytest
 
+from renpy.audio import audio
+from renpy.audio import filter as audio_filter
 from renpy.audio.audio import AudioData, Channel
 
 
@@ -60,3 +64,18 @@ def test_loop_spec_on_audio_data(channel):
         assert isinstance(split, AudioData)
         assert str(split) == "first.wav"
         assert split.data == data
+
+
+def test_audio_filter_without_audio_is_saved_but_not_prepared(channel, mocker):
+    """Without audio the sample rate is 0, which filters cannot prepare for; the setting still persists."""
+
+    mocker.patch.object(audio, "pcm_ok", False)
+    context = SimpleNamespace(raw_audio_filter=None, audio_filter=None)
+    mocker.patch.object(Channel, "context", context)
+    channel.queue = []
+    replace = mocker.patch.object(audio.renpysound, "replace_audio_filter")
+
+    channel.set_audio_filter(audio_filter.Null())
+
+    assert context.audio_filter is not None
+    replace.assert_not_called()

@@ -704,6 +704,7 @@ void RPS_play(int channel, SDL_IOStream *rw, const char *ext, const char *name, 
     struct Channel *c;
 
     if (check_channel(channel)) {
+        SDL_CloseIO(rw);
         return;
     }
 
@@ -723,7 +724,7 @@ void RPS_play(int channel, SDL_IOStream *rw, const char *ext, const char *name, 
 
         if (c->playing_audio_filter) {
             Py_DECREF(c->playing_audio_filter);
-            c->queued_audio_filter = NULL;
+            c->playing_audio_filter = NULL;
         }
     }
 
@@ -781,20 +782,23 @@ void RPS_queue(int channel, SDL_IOStream *rw, const char *ext, const char *name,
     struct Channel *c;
 
     if (check_channel(channel)) {
+        SDL_CloseIO(rw);
         return;
     }
 
     c = &channels[channel];
 
+    /* The callback can end the playing stream between this check and the queue; the lock is recursive. */
+    LOCK_AUDIO();
+
     /* If we're not playing, then we should play instead of queue. */
     if (!c->playing || c->state == CHANNEL_ENDED) {
         RPS_play(channel, rw, ext, name, synchro_start, fadein, tight, start, end, relative_volume, audio_filter);
+        UNLOCK_AUDIO();
         return;
     }
 
     MediaState *ms = load_stream(rw, ext, start, end, c->video);
-
-    LOCK_AUDIO();
 
     /* Free queued sample. */
 
@@ -860,7 +864,8 @@ void RPS_stop(int channel) {
 
     LOCK_AUDIO();
 
-    if (c->playing) {
+    /* An ended stream already posted its end event. */
+    if (c->playing && c->state != CHANNEL_ENDED) {
         post_event(c);
     }
 
@@ -1045,7 +1050,7 @@ void RPS_fadeout(int channel, int ms) {
 
     if (c->queued) {
 
-        float position = samples_to_ms(c->pos) / 1000.0 + c->playing_start_ms;
+        float position = (samples_to_ms(c->pos) + c->playing_start_ms) / 1000.0;
         float duration = media_duration(c->playing);
 
         // If the fadeout will fit into the current file, dequeue the next file, so
@@ -1057,6 +1062,11 @@ void RPS_fadeout(int channel, int ms) {
                 c->queued_name = NULL;
                 c->queued_start_ms = 0;
                 c->queued_relative_volume = 1.0;
+
+                if (c->queued_audio_filter) {
+                    Py_DECREF(c->queued_audio_filter);
+                    c->queued_audio_filter = NULL;
+                }
         }
     }
 
@@ -1583,6 +1593,9 @@ void RPS_quit() {
     for (i = 0; i < num_channels; i++) {
         RPS_stop(i);
     }
+
+    /* Release streams the callback retired before the device stopped. */
+    RPS_periodic();
 
     SDL_DestroyAudioStream(audio_stream);
     audio_stream = NULL;

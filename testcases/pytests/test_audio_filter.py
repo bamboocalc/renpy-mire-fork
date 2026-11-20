@@ -67,6 +67,14 @@ def test_delay_keeps_stereo_channels_separate(apply_filter, delay, channel, fram
     assert apply(apply_filter, audio_filter.Delay(delay), samples) == expected
 
 
+@pytest.mark.parametrize(("delay", "rate"), [([-0.5, 0.2], 1000), (0.2, 0)], ids=["negative", "no-rate"])
+def test_delay_rejects_settings_that_index_outside_its_ring(delay, rate):
+    """A negative delay or a zero sample rate would make the native ring buffer read and write out of bounds."""
+
+    with pytest.raises(ValueError):
+        audio_filter.Delay(delay).prepare(rate)
+
+
 def test_delay_wraps_and_preserves_state_between_calls(apply_filter):
     """
     A Delay keeps its internal buffer across successive calls, so chunked input matches one large call.
