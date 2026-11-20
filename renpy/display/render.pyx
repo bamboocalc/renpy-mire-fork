@@ -307,8 +307,8 @@ def render_for_size(d, width, height, st, at):
 
     id_d = id(d)
     orig_wh = (width, height, frame_time-st, frame_time-at)
-    render_cache_d = render_cache[id_d]
-    rv = render_cache_d.get(orig_wh, None)
+    # A lookup on the defaultdict would add an empty entry that check_redraws treats as cached.
+    rv = render_cache.get(id_d, { }).get(orig_wh, None)
 
     if rv is not None:
         return rv
@@ -332,7 +332,7 @@ def invalidate(d):
         redraw(d, 0)
         return
 
-    for v in list(render_cache[id(d)].values()):
+    for v in list(render_cache.get(id(d), { }).values()):
         v.kill_cache()
 
 def check_redraws():
@@ -995,7 +995,9 @@ cdef class Render:
             (reverse.xdx != 1.0 or
             reverse.xdy != 0.0 or
             reverse.ydx != 0.0 or
-            reverse.ydy != 1.0) or
+            reverse.ydy != 1.0 or
+            # Offsets such as zpos sit outside the 2x2 part; only the blit path keeps them.
+            reverse != IDENTITY) or
             this.mesh or
             (focus and self.focuses and any(callable(f[8]) for f in self.focuses))):
 
@@ -1131,6 +1133,7 @@ cdef class Render:
         rv.mesh = self.mesh
         rv.shaders = self.shaders
         rv.uniforms = self.uniforms
+        rv.uniforms_has_render = self.uniforms_has_render
         rv.properties = self.properties
 
         rv.text_input = self.text_input

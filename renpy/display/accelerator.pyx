@@ -1233,11 +1233,11 @@ cdef class RenderTransform:
         if perspective:
             z11 = perspective[1]
 
-        # Actually render the child.
-        self.render_child(st, at)
-
-        # Reset the z11 distance.
-        z11 = old_z11
+        # Actually render the child, then reset the z11 distance even if it raised.
+        try:
+            self.render_child(st, at)
+        finally:
+            z11 = old_z11
 
         # Tiling and panning.
         self.tile_and_pan()

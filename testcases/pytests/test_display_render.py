@@ -175,3 +175,35 @@ def test_callable_mask_not_focused_outside_nested_clipping(subpixel: bool, point
     clipped = clipped.subsurface((5, 4, 40, 20), focus=True, subpixel=subpixel)
 
     assert clipped.focus_at_point(*point, None) is None
+
+
+def test_aligned_subsurface_keeps_a_z_offset() -> None:
+    """A reverse matrix that only moves along z, as zpos makes, passed the 2D alignment check and was dropped."""
+
+    render = Render(100, 100)
+    render.blit(Render(100, 100), (0, 0))
+    render.reverse = renpy.display.matrix.Matrix.offset(0, 0, 100)
+
+    clipped = render.subsurface((10, 10, 50, 50))
+
+    assert [child[0] for child in clipped.children] == [render]
+
+
+def test_subsurface_keeps_the_render_uniform_flag() -> None:
+    """Without the flag, the textures of renders used as uniforms aren't loaded or released."""
+
+    render = Render(10, 10)
+    render.add_uniform("u_texture", Render(10, 10))
+
+    assert render.subsurface((0, 0, 5, 5)).uniforms_has_render
+
+
+def test_invalidating_an_unrendered_displayable_does_not_cache_it(mocker) -> None:
+    """An empty cache entry made a pending redraw of a displayable that was never rendered look necessary."""
+
+    mocker.patch.object(renpy.display.render, "sizing", True)
+    displayable = object()
+
+    renpy.display.render.invalidate(displayable)
+
+    assert id(displayable) not in renpy.display.render.render_cache
