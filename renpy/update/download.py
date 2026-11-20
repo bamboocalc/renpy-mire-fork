@@ -66,28 +66,26 @@ def write_range(f, headers, content):
 
 
 def write_multipart(f, headers, content):
-    m = re.search(r"boundary=(.*)", headers["Content-Type"])
-    separator = m.group(1).encode("utf-8")
-
-    boundary = b"\r\n--" + separator + b"\r\n"
-    end_boundary = b"\r\n--" + separator + b"--\r\n"
-
-    content = content.split(end_boundary, 1)[0]
+    m = re.search(r'boundary="?([^";]+)"?', headers["Content-Type"])
+    delimiter = b"\r\n--" + m.group(1).encode("utf-8")
 
     rv = []
 
-    for part in content.split(boundary):
-        if not part:
-            continue
+    # The first delimiter need not follow a line break.
+    for part in (b"\r\n" + content).split(delimiter)[1:]:
+        # The close delimiter.
+        if part.startswith(b"--"):
+            break
 
         part_header_text, part_content = part.split(b"\r\n\r\n", 1)
-        part_header_text = part_header_text.decode("utf-8")
 
-        part_headers = {}
+        part_headers = requests.structures.CaseInsensitiveDict()
 
-        for i in part_header_text.split("\r\n"):
-            k, v = i.split(": ", 1)
-            part_headers[k] = v
+        for i in part_header_text.decode("utf-8").split("\r\n"):
+            k, sep, v = i.partition(":")
+
+            if sep:
+                part_headers[k.strip()] = v.strip()
 
         rv.extend(write_range(f, part_headers, part_content))
 
@@ -162,10 +160,11 @@ def download_ranges(url, ranges, destination, progress_callback=None):
                     return False
 
             else:
+                # The server sent the whole file.
                 destination_file.seek(0)
                 destination_file.truncate()
                 destination_file.write(content)
-                break
+                return True
 
     if not ranges:
         return True

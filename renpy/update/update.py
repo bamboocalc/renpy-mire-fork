@@ -395,7 +395,7 @@ class Update(object):
 
                 if source_file is None:
                     self.log("Segment %s was not found.", target_segment.hash)
-                    raise Exception("Segment %s was not found in index.")
+                    raise Exception("Segment %s was not found in index." % target_segment.hash)
 
                 plan.append(
                     Plan(

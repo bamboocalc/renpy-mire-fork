@@ -26,6 +26,7 @@ import os
 
 import renpy
 import io
+import tempfile
 import time
 import traceback
 
@@ -54,7 +55,8 @@ first_deferred_delete = False
 def delete(fn: str):
     """
     Deletes the file `fn`. If deletion fails, renames the file into the
-    deleted directory, to be deleted on next startup.
+    deleted directory, to be deleted on next startup. Raises an exception
+    if neither works.
     """
 
     global first_deferred_delete
@@ -77,12 +79,16 @@ def delete(fn: str):
             try:
                 if not os.path.exists(DELETED_DIRECTORY):
                     os.makedirs(DELETED_DIRECTORY, exist_ok=True)
-                os.rename(fn, os.path.join(DELETED_DIRECTORY, os.path.basename(fn)))
+
+                # Files from different directories can share a name.
+                target = tempfile.mkdtemp(dir=DELETED_DIRECTORY)
+                os.rename(fn, os.path.join(target, os.path.basename(fn)))
 
                 return
 
             except Exception:
-                pass
+                if i == attempts - 1:
+                    raise
 
             time.sleep(delay)
 

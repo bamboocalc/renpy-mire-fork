@@ -147,7 +147,7 @@ class BlockGenerator(object):
             # files will appear before the older ones, and so we won't have to pull
             # from older files to create a new one.
             files = list(filelist.files)
-            files.sort(key=lambda x: (x.mtime, x.name))
+            files.sort(key=lambda x: (os.path.getmtime(x.data_filename or x.name), x.name))
             files.reverse()
 
             for i, file in enumerate(files):

@@ -209,7 +209,7 @@ init -1500 python in updater:
             self.done_pause = done_pause
 
             # Should the user be allowed to cancel the update?
-            self.allow_cancel = False
+            self.allow_cancel = allow_cancel
 
             # Public attributes set by the RPU updater
             self.new_disk_size = None
@@ -826,8 +826,12 @@ init -1500 python in updater:
                         if not signature:
                             break
 
-                        if verifying_key.verify(signature, updates_json):
-                            verified = True
+                        # The file can hold several signatures; any one of them can match.
+                        try:
+                            if verifying_key.verify(signature, updates_json):
+                                verified = True
+                        except ecdsa.BadSignatureError:
+                            pass
 
                     self.log.write("Verified with ECDSA.\n")
 
@@ -1098,8 +1102,8 @@ init -1500 python in updater:
             The name of the screen to use.
         """
 
-        global installed_packages_cache
-        installed_packages_cache = None
+        global installed_state_cache
+        installed_state_cache = None
 
         u = Updater(
             url=url,
