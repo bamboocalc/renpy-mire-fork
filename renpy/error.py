@@ -1398,9 +1398,9 @@ class TracebackException:
                 if e and isinstance(e, BaseExceptionGroup):
                     exceptions = []
                     for exc in e.exceptions:
-                        te = TracebackException(exc, _seen=_seen)
-                        exceptions.append(te)
-                        queue.append((te, exc))
+                        child = TracebackException(exc, _seen=_seen)
+                        exceptions.append(child)
+                        queue.append((child, exc))
 
                     te.exceptions = exceptions
 
