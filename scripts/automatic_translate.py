@@ -190,7 +190,7 @@ def process_file(fn, language, only_strings=[]):
     source_fn = ""
     old = ""
 
-    with open(fn) as f:
+    with open(fn, encoding="utf-8") as f:
         lines = f.readlines()
 
     for l in lines:
@@ -220,7 +220,7 @@ def process_file(fn, language, only_strings=[]):
 
             result.append(l)
 
-    with open(fn, "w") as f:
+    with open(fn, "w", encoding="utf-8") as f:
         f.write("".join(result))
 
 

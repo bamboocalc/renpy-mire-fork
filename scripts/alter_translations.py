@@ -3,7 +3,6 @@
 from __future__ import print_function
 
 import os.path
-import codecs
 import argparse
 
 ENDINGS = [
@@ -22,10 +21,8 @@ def process_file(fn):
     print("Processing", fn)
 
     lines = []
-    with open(fn, "rb") as f:
+    with open(fn, "r", encoding="utf-8-sig") as f:
         for l in f:
-            l = l.replace(codecs.BOM_UTF8, "")
-
             l = l.replace(args.old, args.new)
 
             l = l.rstrip()
@@ -33,8 +30,9 @@ def process_file(fn):
 
             lines.append(l)
 
-    with open(fn, "wb") as f:
-        f.write(codecs.BOM_UTF8 + "".join(lines))
+    # utf-8-sig writes the byte order mark that reading it strips.
+    with open(fn, "w", encoding="utf-8-sig") as f:
+        f.write("".join(lines))
 
 
 def process(root):

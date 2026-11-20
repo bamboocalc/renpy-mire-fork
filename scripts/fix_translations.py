@@ -23,7 +23,7 @@ def process_file(fn):
     print("Processing", fn)
 
     lines = []
-    with open(fn, "r") as f:
+    with open(fn, "r", encoding="utf-8") as f:
         for l in f:
             l = l.replace(BOM, "")
 
@@ -35,7 +35,7 @@ def process_file(fn):
 
             lines.append(l)
 
-    with open(fn, "w") as f:
+    with open(fn, "w", encoding="utf-8") as f:
         f.write(BOM + "".join(lines))
 
 
