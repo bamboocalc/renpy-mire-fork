@@ -269,11 +269,12 @@ def init():
             float n = min(min(c.r, c.g), c.b);
             float x = max(max(c.r, c.g), c.b);
 
-            if (n < 0.0) {
+            // A gray color has l == n == x, and needs no clipping toward its own luma.
+            if (n < 0.0 && l > n) {
                 c = l + (c - l) * l / (l - n);
             }
 
-            if (x > 1.0) {
+            if (x > 1.0 && x > l) {
                 c = l + (c - l) * (1.0 - l) / (x - l);
             }
 

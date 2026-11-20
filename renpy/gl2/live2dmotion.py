@@ -48,6 +48,9 @@ class Linear(object):
         self.y1 = y1
 
     def get(self, t):
+        if self.duration <= 0:
+            return self.y1
+
         done = t / self.duration
         return self.y0 + (self.y1 - self.y0) * done
 
@@ -102,6 +105,9 @@ class Bezier(object):
         self.old_beziers = old_beziers
 
     def easing_get(self, t):
+        if self.duration <= 0:
+            return self.y3
+
         done = t / self.duration
 
         def lerp(a, b):
@@ -288,9 +294,10 @@ class Motion(object):
         parameter name, and the values are the blend factor and value.
         """
 
-        if st == self.duration:
-            st = self.duration
-        else:
+        # A motion with no duration holds its last values.
+        if self.duration <= 0:
+            st = 0.0
+        elif st != self.duration:
             st = st % self.duration
 
         rv = {}
@@ -344,7 +351,7 @@ class Motion(object):
         redrawn.
         """
 
-        st = st % self.duration
+        st = st % self.duration if self.duration > 0 else 0.0
 
         rv = 86400.0
 
