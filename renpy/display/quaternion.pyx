@@ -144,6 +144,15 @@ def euler_slerp(double complete, old, new):
     #calculate new quaternion between old and new.
     old_q_mul_new_q = (old_q_x * new_q_x + old_q_y * new_q_y + old_q_z * new_q_z + old_q_w * new_q_w)
     dot = old_q_mul_new_q
+
+    # q and -q are the same rotation; a negative dot product would interpolate the long way round.
+    if dot < 0:
+        new_q_x = -new_q_x
+        new_q_y = -new_q_y
+        new_q_z = -new_q_z
+        new_q_w = -new_q_w
+        dot = -dot
+
     if dot > 1.0:
         dot = 1.0
     elif dot < -1.0:
@@ -180,11 +189,11 @@ def euler_slerp(double complete, old, new):
     if siny >= 1:
         x = 0
         y = pi/2
-        z = atan2(sinz_cosp1, cosz_cosp1)
+        z = -atan2(sinz_cosp1, cosz_cosp1)
     elif siny <= -1:
         x = 0
         y = -pi/2
-        z = atan2(sinz_cosp1, cosz_cosp1)
+        z = -atan2(sinz_cosp1, cosz_cosp1)
     else:
         x = atan2(sinx_cosp, cosx_cosp)
         if siny > 1.0:

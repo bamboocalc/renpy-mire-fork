@@ -278,10 +278,10 @@ cdef class Matrix:
         return self
 
     cdef Matrix inplace_reverse_offset(Matrix self, float xo, float yo):
+        # Premultiplies by Offset(xo, yo, 0), which leaves the z and w rows alone.
 
         cdef float xdx, xdy, xdz, xdw
         cdef float ydx, ydy, ydz, ydw
-        cdef float zdx, zdy, zdz, zdw
 
         xdx = self.wdx*xo + self.xdx
         xdy = self.wdy*xo + self.xdy
@@ -293,11 +293,6 @@ cdef class Matrix:
         ydz = self.wdz*yo + self.ydz
         ydw = self.wdw*yo + self.ydw
 
-        zdx = self.xdx + self.zdx
-        zdy = self.xdy + self.zdy
-        zdz = self.xdz + self.zdz
-        zdw = self.xdw + self.zdw
-
         self.xdx = xdx
         self.xdy = xdy
         self.xdz = xdz
@@ -307,11 +302,6 @@ cdef class Matrix:
         self.ydy = ydy
         self.ydz = ydz
         self.ydw = ydw
-
-        self.zdx = zdx
-        self.zdy = zdy
-        self.zdz = zdz
-        self.zdw = zdw
 
         self.inverse_cache = None
         self.transpose_cache = None
