@@ -649,7 +649,10 @@ class Script:
             if filename[-1] == "c":
                 filename = filename[:-1]
 
-            if not all_stmts[0].filename.lower().endswith(filename.lower()):
+            # A _ren.py file compiles to an .rpyc without the _ren suffix.
+            sources = (filename.lower(), filename.lower().rpartition(".")[0] + "_ren.py")
+
+            if not all_stmts[0].filename.lower().endswith(sources):
                 filename += "c"
 
                 for i in all_stmts:

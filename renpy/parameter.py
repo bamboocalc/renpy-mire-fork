@@ -331,6 +331,8 @@ class Signature(object):
                         # Looks like we have no parameter for this positional
                         # argument
                         _raise(TypeError, "too many positional arguments")
+                        # When ignoring errors, this parameter can still take a keyword argument.
+                        parameters_ex = (param,)
                         break
 
                     if param.kind == param.VAR_POSITIONAL:
@@ -344,6 +346,7 @@ class Signature(object):
 
                     if param.name in kwargs and param.kind != param.POSITIONAL_ONLY:
                         _raise(TypeError, "multiple values for argument {arg!r}", arg=param.name)
+                        parameters_ex = (param,)
                         break
 
                     arguments[param.name] = arg_val

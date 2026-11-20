@@ -584,13 +584,17 @@ class ArgumentsWrapper(ast.arguments):
             assert isinstance(name, ast.Name)
             return ast.arg(name.id, lineno=name.lineno, col_offset=name.col_offset)
 
+        def make_name(name):
+            # A function without *args or **kwargs has None here.
+            return None if name is None else ast.arg(name, lineno=1, col_offset=0)
+
         # contents. source doesn't record lineno/col_offset for vararg/kwarg
         self.posonlyargs = []
         self.args = [make_arg(i) for i in state["args"]]
-        self.vararg = ast.arg(state["vararg"], lineno=1, col_offset=0)
+        self.vararg = make_name(state["vararg"])
         self.kwonlyargs = []
         self.kw_defaults = []
-        self.kwarg = ast.arg(state["kwarg"], lineno=1, col_offset=0)
+        self.kwarg = make_name(state["kwarg"])
         self.defaults = state["defaults"]
 
 

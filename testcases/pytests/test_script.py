@@ -144,3 +144,29 @@ def test_load_order_without_errors(load):
     expected = ["00common", "libs/y/01cds", "libs/x/bar", "00early", "script", "mods/y/01m", "mods/x/m"]
 
     assert load(files, common=["00common"]) == expected
+
+
+@pytest.mark.parametrize(
+    "source, compiled, expected",
+    [
+        ("game/script_ren.py", "game/script.rpyc", "game/script_ren.py"),
+        ("game/script.rpy", "game/script.rpyc", "game/script.rpy"),
+        ("game/old.rpy", "game/new.rpyc", "game/new.rpyc"),
+    ],
+)
+def test_rpyc_without_source_keeps_its_filename(mocker, source, compiled, expected):
+    """Nodes compiled from a _ren.py file were renamed to the .rpyc when the game shipped without sources."""
+
+    script = Script.__new__(Script)
+    script.translator = mocker.Mock()
+    script.namemap = {}
+    script.all_stmts = None
+    script.need_analysis = []
+    script.need_compress = []
+    mocker.patch.object(script, "update_bytecode", create=True)
+    mocker.patch.object(renpy.lexer, "elide_filename", side_effect=lambda fn: fn)
+
+    node = renpy.ast.Pass((source, 1))
+    script.finish_load([node], [], check_names=False, filename=compiled)
+
+    assert node.filename == expected
