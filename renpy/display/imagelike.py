@@ -312,7 +312,8 @@ class Frame(renpy.display.displayable.Displayable):
         bw = self.left + self.right
         bh = self.top + self.bottom
 
-        xborder = min(bw, sw - 2, dw)
+        # A child narrower than 2 pixels has no room for borders, and stretches instead.
+        xborder = max(0, min(bw, sw - 2, dw))
         if xborder and bw:
             left = self.left * xborder // bw
             right = self.right * xborder // bw
@@ -320,7 +321,7 @@ class Frame(renpy.display.displayable.Displayable):
             left = 0
             right = 0
 
-        yborder = min(bh, sh - 2, dh)
+        yborder = max(0, min(bh, sh - 2, dh))
         if yborder and bh:
             top = self.top * yborder // bh
             bottom = self.bottom * yborder // bh

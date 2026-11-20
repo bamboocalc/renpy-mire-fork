@@ -110,6 +110,18 @@ def test_uncached_surface_reloads(mocker, cache, draw, cache_surfaces):
     draw.load_texture.assert_not_called()
 
 
+def test_surface_request_keeps_the_cached_texture(mocker, cache, draw):
+    """Asking for the surface of an image cached only as a texture replaced its entry, discarding the texture."""
+
+    mocker.patch.object(renpy.config, "cache_surfaces", False)
+    image = im.Null()
+    texture = cache.get(image, texture=True)
+
+    assert isinstance(cache.get(image), renpy.pygame.Surface)
+    assert cache.get(image, texture=True) is texture
+    assert draw.load_texture.call_count == 1
+
+
 def test_uncached_texture_render_and_prediction_retain_nothing(mocker, cache, draw):
     """
     An uncached image is loaded afresh by every request and nothing is retained in the cache. Requesting

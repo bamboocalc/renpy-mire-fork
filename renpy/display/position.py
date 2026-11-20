@@ -348,4 +348,10 @@ class position:
         return f"position({absolute}, {self.relative})"
 
     def __hash__(self) -> int:
+        simple = self.simplify()
+
+        # A position equal to a number hashes as that number.
+        if type(simple) is not position:
+            return hash(simple)
+
         return hash((self.absolute, self.relative))

@@ -741,6 +741,9 @@ class RotoZoom(renpy.display.displayable.Displayable):
             rot_time = 1.0
             zoom_time = 1.0
 
+        # Checked before clamping, which would make every time look unfinished.
+        running = rot_time < 1.0 or zoom_time < 1.0
+
         rot_time = min(rot_time, 1.0)
         zoom_time = min(zoom_time, 1.0)
 
@@ -764,7 +767,7 @@ class RotoZoom(renpy.display.displayable.Displayable):
 
         rv = renpy.display.render.render(self.transform, width, height, st, at)
 
-        if rot_time <= 1.0 or zoom_time <= 1.0:
+        if running:
             renpy.display.render.redraw(self.transform, 0)
 
         return rv

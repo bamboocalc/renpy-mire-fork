@@ -96,6 +96,15 @@ def test_normal_resize_keeps_existing_policy(mocker, window_environment):
     get_window.return_value.resize.assert_called_once_with((1024, 768), opengl=True, fullscreen=True, maximized=False)
 
 
+def test_physical_size_rounds_at_fractional_scales():
+    """A 1366x768 window at 125% is 1707.5 pixels wide; truncating 1707 / 1.25 gave 1365."""
+
+    draw = make_draw(1.25, {})
+    draw.physical_size = (1707, 960)
+
+    assert draw.get_physical_size() == (1366, 768)
+
+
 def test_gltf_profiling_keeps_cpu_counts_without_gpu_timers():
     """Optional GPU timers cannot prevent CPU profiling; snapshots and resets preserve independent numeric data."""
     from renpy.gl2.gl2draw import GltfProfiler

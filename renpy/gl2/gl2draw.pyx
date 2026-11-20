@@ -1796,8 +1796,9 @@ cdef class GL2Draw:
     def get_physical_size(self):
         x, y = self.physical_size
 
-        x = int(x / self.dpi_scale)
-        y = int(y / self.dpi_scale)
+        # Rounded, since truncating shrank a saved window by a pixel per launch at fractional scales.
+        x = round(x / self.dpi_scale)
+        y = round(y / self.dpi_scale)
 
         return (x, y)
 

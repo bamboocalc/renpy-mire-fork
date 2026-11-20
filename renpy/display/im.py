@@ -456,6 +456,9 @@ class Cache:
                     if old_ce := self.cache.get(image):
                         self.cache_size -= old_ce.size()
 
+                        # Reloading the surface of a texture-only entry keeps its texture.
+                        ce.texture = old_ce.texture
+
                     self.cache[image] = ce
                     self.cache_size += ce.size()
 
