@@ -344,6 +344,21 @@ def test_mesh_oversample_under_perspective(mocker, z, scale, expected):
     assert record_oversamples(mesh_render(100, 50), stack) == [pytest.approx(expected, rel=1e-4)]
 
 
+def test_depth_peel_copies_are_not_oversampled_behind_the_camera(mocker):
+    """The depth copies of a peeled glTF scene used a scale of 0, which a mesh behind the camera doesn't apply."""
+
+    mocker.patch.object(renpy.config, "mesh_oversample", 8.0)
+    copy = renpy.gl2.gltf.peeled_scene(Render(100, 50), [], 1, False).children[0][0]
+    assert copy.properties["gltf_pass"] == "transparency_copy"
+
+    # The copy's texture uniform needs a real draw, so its properties are measured on a plain mesh.
+    mesh = mesh_render(100, 50)
+    for name, value in copy.properties.items():
+        mesh.add_property(name, value)
+
+    assert record_oversamples(mesh, perspective_stack(Matrix.offset(300, 200, 2000.0))) == [1.0]
+
+
 def test_mesh_oversample_uses_most_magnified_corner(mocker):
     """
     A mesh tilted towards a perspective camera is oversampled by the scale of its most magnified part.

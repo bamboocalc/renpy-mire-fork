@@ -465,7 +465,8 @@ def peeled_scene(scene, meshes, layers, refractive):
         copied.add_property("gltf_pass", "transparency_copy")
         copied.add_property("hdr", True)
         copied.add_property("mipmap", refractive)
-        copied.add_property("mesh_oversample_scale", 0.0)
+        # A scale of 0 isn't applied when part of the mesh is behind a perspective camera.
+        copied.add_property("mesh_oversample", False)
         layer = variant("layer", "renpy.gltf.peel_color")
         layer.add_property("gltf_pass", "transparency_layer")
         layer.add_uniform("u_gltf_peel_selected", depth)

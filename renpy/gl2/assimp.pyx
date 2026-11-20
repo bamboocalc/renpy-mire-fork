@@ -2556,7 +2556,7 @@ class GLTFScene(Displayable):
             rv.add_property("depth_texture", True)
             rv.add_property("gltf_depth_required", True)
             # One drawable-resolution framebuffer also supplies the per-layer refraction copies.
-            rv.add_property("mesh_oversample_scale", 0.0)
+            rv.add_property("mesh_oversample", False)
         rv.add_property("gltf_scene", True)
         if self.depth_output:
             projection = meshes[0][3] if meshes else renpy.display.matrix.Matrix.texture_projection(width, height)
