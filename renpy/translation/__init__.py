@@ -215,7 +215,7 @@ class ScriptTranslator(object):
             tl = self.language_translates.get((identifier, language), None)
 
             if (tl is None) and alternate:
-                tl = self.language_translates.get((identifier, alternate), None)
+                tl = self.language_translates.get((alternate, language), None)
 
         else:
             tl = None
@@ -1292,13 +1292,14 @@ def detect_user_locale():
         return None, None
 
     normalize = locale.normalize(locale_name)
-    if normalize == locale_name:
-        language = region = locale_name
+    if normalize != locale_name:
+        locale_name = normalize.split(".", 1)[0]
+
+    # normalize leaves script-tagged names like zh-hans_CN alone, and can return C, which has no region.
+    if "_" in locale_name:
+        language, _, region = locale_name.lower().partition("_")
     else:
-        locale_name = normalize
-        if "." in locale_name:
-            locale_name, _ = locale_name.split(".", 1)
-        language, region = locale_name.lower().split("_")
+        language = region = locale_name
 
     return language, region
 

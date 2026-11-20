@@ -242,3 +242,38 @@ def test_non_string_raises(translator, old):
 
     with pytest.raises(TypeError):
         translator.translate(old)
+
+
+################################################################################
+# Runtime lookup and locale detection
+################################################################################
+
+
+def test_translation_written_for_the_alternate_identifier_is_found(mocker):
+    """The alternate identifier was looked up in the language's place, so its translation was never found."""
+
+    mocker.patch.object(renpy.game, "preferences", SimpleNamespace(language="french"))
+    translator = translation.ScriptTranslator()
+    translator.default_translates["start_1234abcd"] = SimpleNamespace(block=["default"])
+    translator.language_translates["start_9876fedc", "french"] = SimpleNamespace(block=["french"])
+
+    assert translator.lookup_translate("start_1234abcd", "start_9876fedc") == ("french", True)
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("en_US", ("en", "us")),
+        ("zh-hans_CN", ("zh-hans", "cn")),
+        ("C", ("C", "C")),
+        ("c", ("C", "C")),
+    ],
+)
+def test_detect_user_locale_splits_language_and_region(mocker, name, expected):
+    """Script-tagged names, as macOS gives for Chinese, weren't split, and a name normalized to C raised."""
+
+    for platform in ("windows", "android", "ios", "macintosh"):
+        mocker.patch.object(renpy, platform, False)
+    mocker.patch("locale.getdefaultlocale", return_value=(name, None))
+
+    assert translation.detect_user_locale() == expected
