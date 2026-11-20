@@ -64,6 +64,7 @@ from cpython.buffer cimport (
 from cpython.exc cimport PyErr_WriteUnraisable
 from libc.string cimport memcpy
 
+import errno
 import io
 import os
 import sys
@@ -701,6 +702,20 @@ cdef class IOPath(IOStream):
     def writable(IOPath self not None, /):
         self._checkClosed()
         return self.mode == "wb"
+
+    def seek(IOPath self not None, Sint64 offset, int whence=io.SEEK_SET, /):
+        cdef Sint64 base = 0
+
+        if whence == io.SEEK_CUR:
+            base = self.tell()
+        elif whence == io.SEEK_END:
+            base = SDL_GetIOSize(self.borrow())
+
+        # SDL's Windows file backend reports success for a seek before the start and desynchronizes its read-ahead.
+        if base >= 0 and base + offset < 0:
+            raise IOError(errno.EINVAL, "Could not seek: negative position")
+
+        return IOStream.seek(self, offset, whence)
 
     def seekable(IOPath self not None, /):
         self._checkClosed()
