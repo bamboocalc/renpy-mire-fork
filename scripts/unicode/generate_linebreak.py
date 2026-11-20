@@ -81,7 +81,7 @@ def main():
         CHAR_COUNT = 65536 * 2
         cc = ["XX"] * CHAR_COUNT
 
-        for l in open("LineBreak.txt"):
+        for l in open(pathlib.Path(__file__).parent / "LineBreak.txt"):
             m = re.match(r"(\w+)\.\.(\w+)\s*;\s*(\w\w)", l)
             if m:
                 start = int(m.group(1), 16)

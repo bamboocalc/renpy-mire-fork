@@ -42,7 +42,7 @@ def main():
     for fn in root.glob("renpy/**/*.py"):
         current_path = fn
 
-        with open(fn) as f:
+        with open(fn, encoding="utf-8") as f:
             tree = ast.parse(f.read())
             FindFunctions().visit(tree)
 

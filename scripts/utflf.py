@@ -27,7 +27,7 @@ for dn in sys.argv[1:]:
         for fn in files:
             fn = os.path.join(directory, fn)
 
-            if not fn.endswith(".rpy") or fn.endswith(".rpym") or fn.endswith(".py"):
+            if not fn.endswith((".rpy", ".rpym", ".py")):
                 continue
 
             print(fn)

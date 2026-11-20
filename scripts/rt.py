@@ -32,7 +32,7 @@ def list_command(args):
 
     modtimes.sort()
 
-    if not args.all:
+    if modtimes and not args.all:
         last = modtimes[-1][0]
         modtimes = [i for i in modtimes if i[0] > last - 7 * 86400]
 
