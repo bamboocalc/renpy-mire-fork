@@ -1065,6 +1065,8 @@ class Button(renpy.display.layout.Window):
     def _in_current_store(self):
         rv = self._copy()
         rv.style = self.style.copy()
+        # An indexed style inherits from its left parent through its name.
+        rv.style.name = self.style.name
         rv.set_style_prefix(self.style.prefix, True)
         rv.focusable = False
         rv.locked = True

@@ -308,8 +308,9 @@ cdef class StyleCore:
     def copy(self):
         cdef StyleCore rv
 
+        # delattr mutates the property dicts in place, so the copy needs its own.
         rv = Style(self.parent)
-        rv.properties = list(self.properties)
+        rv.properties = copy_properties(self.properties)
         return rv
 
     def __richcmp__(self, o, int op):
@@ -668,6 +669,7 @@ cpdef build_style(StyleCore s):
     cdef int cache_priorities[PREFIX_COUNT * STYLE_PROPERTY_COUNT]
     cdef dict d
     cdef PropertyFunctionWrapper pfw
+    cdef int i
 
     if s.built:
         return
@@ -712,6 +714,13 @@ cpdef build_style(StyleCore s):
                     pfw.function(s.cache, cache_priorities, priority, v)
                 except Exception:
                     renpy.game.exception_info = "While processing the {} property of {}:".format(k, style_name_to_string(s.name))
+
+                    # A retry allocates a new cache, so release this partial one.
+                    for i in range(PREFIX_COUNT * STYLE_PROPERTY_COUNT):
+                        Py_XDECREF(s.cache[i])
+
+                    free(s.cache)
+                    s.cache = NULL
                     raise
 
             priority += PRIORITY_LEVELS
