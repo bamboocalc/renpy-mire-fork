@@ -375,6 +375,7 @@ init -1100 python in _sync:
 
                 if not valid:
                     report_error(_("The sync belongs to a different game."))
+                    return
 
 
             for fn in zf.namelist():
