@@ -181,3 +181,48 @@ def test_disabled_rollback_side_overrides_desktop_preference(mocker):
 
     assert result
     rollback.assert_not_called()
+
+
+def test_input_caret_moves_before_the_text_is_redrawn(mocker):
+    """The caret moved to the end after the new text was drawn, so it showed at the old position."""
+
+    value = mocker.Mock(editable=True)
+    value.get_text.return_value = "abcdef"
+
+    i = behavior.Input.__new__(behavior.Input)
+    i.value = value
+    i.editable = True
+    i.content = "abc"
+    i.caret_pos = 3
+
+    drawn_at = []
+    i.update_text = lambda content, editable: drawn_at.append(i.caret_pos)
+
+    mocker.patch.multiple(
+        behavior, inputs=[i], input_values=[value], current_input_value=value, input_value_active=True
+    )
+    behavior.input_post_per_interact()
+
+    assert drawn_at == [6]
+
+
+@pytest.mark.parametrize(
+    ("emulator", "key", "mod", "kept"),
+    [
+        ("touch_emulator", pygame.K_a, pygame.KMOD_LSHIFT, True),
+        ("touch_emulator", pygame.K_a, 0, False),
+        ("tv_emulator", pygame.K_a, 0, False),
+        ("tv_emulator", pygame.K_LEFT, 0, True),
+    ],
+)
+def test_emulators_filter_key_up_like_key_down(mocker, emulator, key, mod, kept):
+    """The touch emulator dropped shifted key releases, and the TV emulator passed every key release."""
+
+    from renpy.display import emulator as emulator_module
+
+    mocker.patch.object(renpy.display, "interface", SimpleNamespace(text_rect=None), create=True)
+    function = getattr(emulator_module, emulator)
+
+    for kind in (pygame.KEYDOWN, pygame.KEYUP):
+        ev = pygame.event.Event(kind, key=key, mod=mod)
+        assert (function(ev, 0, 0)[0] is ev) == kept

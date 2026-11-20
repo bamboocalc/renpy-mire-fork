@@ -145,3 +145,36 @@ def test_init_falls_back_when_prism_missing(mocker, flag, backend):
 
     assert tts_module.platform_tts is marker
     prism_tts.assert_not_called()
+
+
+def test_windows_tts_passes_text_outside_the_script(mocker):
+    """Dialogue was quoted into the PowerShell script, so an apostrophe ended the string and the rest ran as code."""
+    import shutil
+    import subprocess
+
+    popen = mocker.patch.object(tts_module.subprocess, "Popen")
+    mocker.patch.object(tts_module.subprocess, "CREATE_NO_WINDOW", 0, create=True)
+    mocker.patch.object(tts_module, "get_voice", side_effect=lambda s: ("en-IE: O'Brien", s))
+    preferences = SimpleNamespace(get_mixer=lambda name: 1.0, tts_speed=1.0)
+    mocker.patch.object(renpy.game, "preferences", preferences, create=True)
+
+    text = "It's fine'); Remove-Item x; ('"
+    tts_module.WindowsTTS().speak(text)
+
+    args, kwargs = popen.call_args
+    script = args[0][-1]
+    assert "Remove-Item" not in script
+    assert kwargs["env"]["RENPY_TTS_TEXT"] == text
+    assert kwargs["env"]["RENPY_TTS_VOICE"] == "O'Brien"
+
+    if sys.platform == "win32" and shutil.which("powershell"):
+        mocker.stop(popen)
+        script = script.replace("$synth.Speak(", "[Console]::Out.Write(")
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            env=kwargs["env"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout == text

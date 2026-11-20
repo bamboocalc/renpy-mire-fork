@@ -1444,8 +1444,8 @@ def input_post_per_interact():
         content = i.value.get_text()
 
         if (i.editable != editable) or (content != i.content):
-            i.update_text(content, editable)
             i.caret_pos = len(content)
+            i.update_text(content, editable)
 
 
 class CaretBlink(renpy.display.displayable.Displayable):

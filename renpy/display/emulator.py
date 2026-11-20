@@ -85,7 +85,7 @@ def touch_emulator(ev, x, y):
     elif ev.type == pygame.KEYUP and not ios:
         if ev.mod & pygame.KMOD_SHIFT:
             pass
-        if not ev.key in TOUCH_KEYS:
+        elif not ev.key in TOUCH_KEYS:
             return None, x, y
 
     return ev, x, y
@@ -108,7 +108,7 @@ def tv_emulator(ev, x, y):
     elif ev.type == pygame.KEYDOWN:
         if not ev.key in TV_KEYS:
             return None, x, y
-    elif ev.type == pygame.KEYDOWN:
+    elif ev.type == pygame.KEYUP:
         if not ev.key in TV_KEYS:
             return None, x, y
 

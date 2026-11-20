@@ -632,27 +632,21 @@ class WindowsTTS(object):
         speed = renpy.game.preferences.tts_speed
         rate = max(-10, min(10, int(5 * (speed - 1))))
 
-        if voice is not None:
-            # Voice format is "lang: name", extract the name for SAPI.
-            if ": " in voice:
-                voice = voice.split(": ", 1)[1]
-            voice = voice.replace("'", "''")
-            script = """
+        # Voice format is "lang: name", extract the name for SAPI.
+        if voice is not None and ": " in voice:
+            voice = voice.split(": ", 1)[1]
+
+        # The text and voice go through the environment; quoting them into the script let apostrophes end the string.
+        env = dict(os.environ, RENPY_TTS_TEXT=s, RENPY_TTS_VOICE=voice or "")
+
+        script = """
 Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
 $synth.Volume = {volume}
 $synth.Rate = {rate}
-try {{ $synth.SelectVoice('{voice}') }} catch {{ }}
-$synth.Speak('{text}')
-""".format(volume=amplitude_100, rate=rate, voice=voice, text=s)
-        else:
-            script = """
-Add-Type -AssemblyName System.Speech
-$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$synth.Volume = {volume}
-$synth.Rate = {rate}
-$synth.Speak('{text}')
-""".format(volume=amplitude_100, rate=rate, text=s)
+if ($env:RENPY_TTS_VOICE) {{ try {{ $synth.SelectVoice($env:RENPY_TTS_VOICE) }} catch {{ }} }}
+$synth.Speak($env:RENPY_TTS_TEXT)
+""".format(volume=amplitude_100, rate=rate)
 
         self.process = subprocess.Popen(
             [
@@ -661,6 +655,7 @@ $synth.Speak('{text}')
                 "-Command",
                 script,
             ],
+            env=env,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         process = self.process
