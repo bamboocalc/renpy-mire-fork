@@ -115,6 +115,9 @@ def pixellate(pysrc, pydst, avgwidth, avgheight, outwidth, outheight):
     if pydst.get_bitsize() != pysrc.get_bitsize():
         raise Exception("pixellate requires both surfaces have the same bitsize.")
 
+    if min(avgwidth, avgheight, outwidth, outheight) < 1:
+        raise Exception("pixellate requires positive block sizes.")
+
     # pysrc.lock()
     # pydst.lock()
 
@@ -147,6 +150,10 @@ def map(pysrc, pydst, r, g, b, a): # @ReservedAssignment
 
     if pydst.get_size() != pysrc.get_size():
         raise Exception("map requires both surfaces have the same size.")
+
+    # The core indexes each map with a byte value.
+    if min(len(r), len(g), len(b), len(a)) < 256:
+        raise Exception("map requires 256-entry maps.")
 
     # pysrc.lock()
     # pydst.lock()
@@ -444,6 +451,9 @@ def colormatrix(pysrc, pydst,
 
 
 def staticgray(pysrc, pydst, rmul, gmul, bmul, amul, shift, vmap):
+    check(pysrc)
+    check(pydst)
+
     PyErr_Clear()
     staticgray_core(pysrc, pydst, rmul, gmul, bmul, amul, shift, vmap)
 

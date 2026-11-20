@@ -89,7 +89,7 @@ void pixellate32_core(PyObject *pysrc,
             int dstx = outwidth * x;
 
             int srcxlimit = srcx + avgwidth;
-            int dstxlimit = dstx + outheight;
+            int dstxlimit = dstx + outwidth;
 
             if (srcxlimit > srcw) {
                 srcxlimit = srcw;
@@ -231,7 +231,7 @@ void pixellate24_core(PyObject *pysrc,
             int dstx = outwidth * x;
 
             int srcxlimit = srcx + avgwidth;
-            int dstxlimit = dstx + outheight;
+            int dstxlimit = dstx + outwidth;
 
             if (srcxlimit > srcw) {
                 srcxlimit = srcw;
@@ -642,6 +642,16 @@ void linblur32_core(PyObject *pysrc,
     src = PySurface_AsSurface(pysrc);
     dst = PySurface_AsSurface(pydst);
 
+    if (dst->w <= 0 || dst->h <= 0) {
+        return;
+    }
+
+    /* The accumulators walk radius pixels past each end of a line, so the kernel must fit inside it. */
+    int length = vertical ? dst->h : dst->w;
+    if (radius > (length - 1) / 2) {
+        radius = (length - 1) / 2;
+    }
+
     Py_BEGIN_ALLOW_THREADS
 
     srcpixels = (unsigned char *) src->pixels;
@@ -781,6 +791,16 @@ void linblur24_core(PyObject *pysrc,
 
     src = PySurface_AsSurface(pysrc);
     dst = PySurface_AsSurface(pydst);
+
+    if (dst->w <= 0 || dst->h <= 0) {
+        return;
+    }
+
+    /* The accumulators walk radius pixels past each end of a line, so the kernel must fit inside it. */
+    int length = vertical ? dst->h : dst->w;
+    if (radius > (length - 1) / 2) {
+        radius = (length - 1) / 2;
+    }
 
     Py_BEGIN_ALLOW_THREADS
 
@@ -1030,6 +1050,9 @@ void scale32_core(PyObject *pysrc, PyObject *pydst,
 
         s0 = srcpixels + (sline >> 8) * srcpitch;
 
+        /* Bilinear sampling reads the next row and column; the last ones repeat instead of reading past the buffer. */
+        int nextrow = ((sline >> 8) + 1 < src->h) ? srcpitch : 0;
+
         scol = source_xoff * 256 + dest_xoff * xdelta;
 
         while (d < dend) {
@@ -1040,8 +1063,9 @@ void scale32_core(PyObject *pysrc, PyObject *pydst,
             short xfrac = 256 - ((int) scol & 255);
             unsigned short r, g, b, a;
 
-            s0p = s0 + ((int) scol >> 8) * 4; // bpp
-            s1p = s0p + srcpitch;
+            int col = (int) scol >> 8;
+            s0p = s0 + col * 4; // bpp
+            s1p = s0p + nextrow;
 
             r = (((*s0p++ * s0frac) + (*s1p++ * s1frac)) >> 8) * xfrac;
             g = (((*s0p++ * s0frac) + (*s1p++ * s1frac)) >> 8) * xfrac;
@@ -1049,6 +1073,11 @@ void scale32_core(PyObject *pysrc, PyObject *pydst,
             a = (((*s0p++ * s0frac) + (*s1p++ * s1frac)) >> 8) * xfrac;
 
             xfrac = 256 - xfrac;
+
+            if (col + 1 >= src->w) {
+                s0p -= 4;
+                s1p -= 4;
+            }
 
             r += (((*s0p++ * s0frac) + (*s1p++ * s1frac)) >> 8) * xfrac;
             g += (((*s0p++ * s0frac) + (*s1p++ * s1frac)) >> 8) * xfrac;
@@ -1121,6 +1150,9 @@ void scale24_core(PyObject *pysrc, PyObject *pydst,
 
         s0 = srcpixels + (sline >> 8) * srcpitch;
 
+        /* Bilinear sampling reads the next row and column; the last ones repeat instead of reading past the buffer. */
+        int nextrow = ((sline >> 8) + 1 < src->h) ? srcpitch : 0;
+
         scol = source_xoff * 255 + dest_xoff * xdelta;
 
         while (d < dend) {
@@ -1131,14 +1163,20 @@ void scale24_core(PyObject *pysrc, PyObject *pydst,
             short xfrac = 256 - ((int) scol & 255);
             unsigned short r, g, b;
 
-            s0p = s0 + ((int) scol >> 8) * 3; // bpp
-            s1p = s0p + srcpitch;
+            int col = (int) scol >> 8;
+            s0p = s0 + col * 3; // bpp
+            s1p = s0p + nextrow;
 
             r = (((*s0p++ * s0frac) + (*s1p++ * s1frac)) >> 8) * xfrac;
             g = (((*s0p++ * s0frac) + (*s1p++ * s1frac)) >> 8) * xfrac;
             b = (((*s0p++ * s0frac) + (*s1p++ * s1frac)) >> 8) * xfrac;
 
             xfrac = 256 - xfrac;
+
+            if (col + 1 >= src->w) {
+                s0p -= 3;
+                s1p -= 3;
+            }
 
             r += (((*s0p++ * s0frac) + (*s1p++ * s1frac)) >> 8) * xfrac;
             g += (((*s0p++ * s0frac) + (*s1p++ * s1frac)) >> 8) * xfrac;
