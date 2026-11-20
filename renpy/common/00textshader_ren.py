@@ -168,11 +168,13 @@ renpy.register_textshader(
     """,
     vertex_25="""
     float l__duration = u__duration * u_text_slow_duration;
+    float l__done = step(a_text_min_time, u_text_slow_time);
 
     if (l__duration > 0.0) {
-        float l__done = clamp((u_text_slow_time - a_text_min_time) / l__duration, 0.0, 1.0);
-        gl_Position.xy = mix(a_text_center + (gl_Position.xy - a_text_center) * u__zoom, gl_Position.xy, l__done);
+        l__done = clamp((u_text_slow_time - a_text_min_time) / l__duration, 0.0, 1.0);
     }
+
+    gl_Position.xy = mix(a_text_center + (gl_Position.xy - a_text_center) * u__zoom, gl_Position.xy, l__done);
     """,
     u__zoom=0.0,
     u__duration=10.0,

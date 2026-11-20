@@ -1078,9 +1078,9 @@ class RawAttributeGroup(renpy.object.Object):
 
             for i in renpy.list_images():
                 if i.startswith(pattern):
-                    attr, *rest = i.removeprefix(pattern).split()
-                    if (not rest) and (attr not in seen):
-                        rv.append(Attribute(group_name_for_attributes, attr, renpy.displayable(i), **properties))
+                    attrs = i.removeprefix(pattern).split()
+                    if len(attrs) == 1 and (attrs[0] not in seen):
+                        rv.append(Attribute(group_name_for_attributes, attrs[0], renpy.displayable(i), **properties))
 
         return rv
 

@@ -141,7 +141,7 @@ init -1500 python:
                 window_id = "window"
 
                 for k, v in kwargs["properties"].items():
-                    widget_properties[k + str(i)] =  v
+                    widget_properties[k] =  v
 
             else:
 
@@ -150,7 +150,7 @@ init -1500 python:
                 window_id = "window%d" % i
 
                 for k, v in kwargs["properties"].items():
-                    widget_properties[k] =  v
+                    widget_properties[k + str(i)] =  v
 
             widget_properties[who_id] = kwargs["who_args"]
             widget_properties[what_id] = kwargs["what_args"]

@@ -578,7 +578,7 @@ init -1500 python:
                 # At this point, result is either 'next', "next_unlocked", "previous", or "previous_unlocked"
                 # Go through the common advance code.
 
-                if self.unlocked_advance:
+                if self.unlocked_advance or result.endswith("_unlocked"):
                     images = unlocked_images
                 else:
                     images = all_images

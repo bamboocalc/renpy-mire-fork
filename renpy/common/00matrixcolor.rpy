@@ -135,6 +135,9 @@ init -1500 python:
             self.right = right
 
         def __call__(self, other, done):
+            if type(other) is SplineMatrix:
+                other = other.matrix
+
             if type(other) is not type(self):
                 return self.left(None, 1.0) * self.right(None, 1.0)
 
@@ -335,6 +338,9 @@ init -1500 python:
 
 
         def __call__(self, other, done):
+
+            if type(other) is SplineMatrix:
+                other = other.matrix
 
             if type(other) is not type(self):
                 other = self

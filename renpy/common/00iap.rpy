@@ -420,7 +420,7 @@ init -1500 python in iap:
     def get_product(product):
         p = products.get(product, None)
         if p is None:
-            raise Exception("Product %r is has not been registered.")
+            raise Exception("Product %r has not been registered." % (product,))
 
         return p
 

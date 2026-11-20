@@ -38,7 +38,7 @@ python early in icon:
             for p in path:
                 fn = p + prefix + self.name + ".png"
                 if renpy.loadable(fn, directory="images"):
-                    return fn
+                    return Image(fn)
 
             for p in path:
                 fn = p + self.name + ".png"
@@ -50,7 +50,7 @@ python early in icon:
                         c = Color(self.style.color)
                         return im.Recolor(fn, c[0], c[1], c[2], c[3])
                     else:
-                        c = Image(fn)
+                        return Image(fn)
 
             return Text('icon {}'.format(self.name))
 

@@ -39,6 +39,7 @@ init -1499 python in _renpysteam:
     from renpy.store import store, config, NoRollback
 
     ticket = None
+    h_ticket = 0
 
     def retrieve_stats():
         """
@@ -522,7 +523,7 @@ init -1499 python in _renpysteam:
 
         path = create_string_buffer(4096)
         size = c_ulonglong()
-        timestamp = c_int()
+        timestamp = c_uint()
 
         if not steamapi.SteamUGC().GetItemInstallInfo(item_id, byref(size), byref(path), 4096, byref(timestamp)):
             return None

@@ -120,7 +120,7 @@ init python:
                 if not name[0] in "0123456789":
                     continue
 
-                if time > newest_time:
+                if newest_time is None or time > newest_time:
                     newest = name
                     newest_time = time
 

@@ -594,7 +594,7 @@ init -1500 python:
 
         page = str(page)
 
-        for i in renpy.list_slots(__slotname(page, r'\d+')):
+        for i in renpy.list_slots(__slotname(r'\d+', page)):
             renpy.predict(renpy.slot_screenshot(i))
 
     @renpy.pure

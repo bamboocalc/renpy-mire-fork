@@ -161,7 +161,7 @@ init -1500 python:
             self.mr.stop()
 
         def get_selected(self):
-            return renpy.music.get_playing() is None
+            return renpy.music.get_playing(self.mr.channel) is None
 
         def periodic(self, st):
             if self.selected != self.get_selected():
@@ -336,7 +336,7 @@ init -1500 python:
             """
 
             if self.shuffle:
-                if self.shuffled is None or (filename and self.shuffled[0] != filename):
+                if not self.shuffled or (filename and self.shuffled[0] != filename):
                     import random
                     self.shuffled = list(self.playlist)
                     random.shuffle(self.shuffled)

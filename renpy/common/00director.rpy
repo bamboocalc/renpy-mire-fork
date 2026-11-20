@@ -769,6 +769,7 @@ init python in director:
             state.showing = self.lle.showing
 
             state.kind = None
+            state.original_kind = None
             state.mode = "kind"
 
             state.tag = None
@@ -975,7 +976,7 @@ init python in director:
             state.tag = self.tag
             state.original_tag = self.tag
 
-            state.attributes = self.attributes
+            state.attributes = list(self.attributes)
             state.original_attributes = list(self.attributes)
 
             state.transforms = list(self.transforms)
@@ -984,7 +985,7 @@ init python in director:
             state.transition = self.transition
             state.original_transition = self.transition
 
-            state.behind = self.behind
+            state.behind = list(self.behind)
             state.original_behind = list(self.behind)
 
             state.channel = self.channel
@@ -1237,6 +1238,21 @@ init python in director:
         def get_sensitive(self):
             return get_statement()
 
+    def restore_original():
+        """
+        Restores the statement being adjusted to the state it was in when adjusting
+        began, copying the lists so later edits leave the originals alone.
+        """
+
+        state.kind = state.original_kind
+        state.tag = state.original_tag
+        state.attributes = list(state.original_attributes)
+        state.transforms = list(state.original_transforms)
+        state.behind = list(state.original_behind)
+        state.transition = state.original_transition
+        state.channel = state.original_channel
+        state.audio = state.original_audio
+
     class Reset(Action):
         """
         This action resets the AST to what it was when we started adjusting the
@@ -1245,10 +1261,7 @@ init python in director:
 
         def __call__(self):
 
-            state.kind = state.original_kind
-            state.tag = state.original_tag
-            state.attributes = state.original_attributes
-            state.transforms = state.original_transforms
+            restore_original()
 
             if state.kind is None:
                 state.mode = "kind"
@@ -1265,15 +1278,7 @@ init python in director:
 
         def __call__(self):
 
-            state.kind = state.original_kind
-            state.tag = state.original_tag
-            state.attributes = state.original_attributes
-            state.transforms = state.original_transforms
-
-            state.transition = state.original_transition
-
-            state.channel = state.original_channel
-            state.audio = state.original_audio
+            restore_original()
 
             state.mode = "lines"
 
