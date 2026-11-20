@@ -293,23 +293,14 @@ def match_string(str data not None, Py_ssize_t prefix_pos, Py_ssize_t pos, /):
                         c = 0
                         continue
 
-                    # Other parenthesis could contain valid `:`
-                    if c == '(' or c == '[':
+                    # Other parenthesis, and the braces of a dict or set, could contain valid `:`
+                    if c == '(' or c == '[' or c == '{':
                         bracket_depth += 1
-                    elif c == ')' or c == ']':
+                    elif c == ')' or c == ']' or c == '}':
                         if bracket_depth:
                             bracket_depth -= 1
-                    # Otherwise we could enter format specifier.
-                    elif (
-                        c == ':' and
-                        bracket_depth == 0 and
-                        spec_depth < 0 and
-                        # Check for ':=' operator.
-                        not (
-                            pos + 1 < length and
-                            PyUnicode_READ(kind, buf, pos + 1) == '='
-                        )
-                    ):
+                    # Otherwise we could enter format specifier. An unparenthesized `:=` starts one too.
+                    elif c == ':' and bracket_depth == 0 and spec_depth < 0:
                         spec_depth = brace_depth
 
                     # Do not catch braces inside comments.

@@ -113,3 +113,26 @@ def test_exec_expression_keeps_whitespace(parsed_expressions):
     expr = make_lexer(text)._expr_from_range(0, len(text), "exec")
 
     assert str(expr) == text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "f'{x:=#10x}'",
+        "f'{x:=^10}'",
+        "f'{(y:=3)}'",
+        "f'{ {\"a\": \"}\"}[\"a\"] }'",
+        "f'{ {\"a\": \"#\"}[\"a\"] }'",
+        "f'{x:{width}}'",
+        "f\"{x:'>10}\"",
+    ],
+)
+def test_match_string_reads_f_string_replacement_fields_like_python(text):
+    """
+    An unparenthesized `:=` starts a format spec, and the `:` of a dict inside a replacement field does not, so
+    neither changes how quotes, braces, and `#` in the rest of the field are read.
+    """
+
+    compile(text, "test_lexer.rpy", "eval")
+
+    assert renpy.lexersupport.match_string(text, 0, 1)[0] == len(text)
