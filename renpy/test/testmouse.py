@@ -70,7 +70,7 @@ def press_mouse(button: int) -> None:
 
     post(pygame.MOUSEBUTTONDOWN, pos=mouse_pos, button=button)  # type: ignore
 
-    if button < 3:
+    if 1 <= button <= 3:
         mouse_buttons[button - 1] = 1
 
 
@@ -80,7 +80,7 @@ def release_mouse(button: int) -> None:
     """
     post(pygame.MOUSEBUTTONUP, pos=mouse_pos, button=button)  # type: ignore
 
-    if button < 3:
+    if 1 <= button <= 3:
         mouse_buttons[button - 1] = 0
 
 
@@ -114,3 +114,4 @@ def reset() -> None:
 
     global mouse_pos
     mouse_pos = None
+    mouse_buttons[:] = [0, 0, 0]

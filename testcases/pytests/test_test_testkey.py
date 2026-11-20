@@ -86,3 +86,10 @@ def test_keymap_event_uses_existing_queue(mocker):
     testkey.queue_keysym("dismiss")
 
     queue.assert_called_once_with("dismiss")
+
+
+@pytest.mark.parametrize("keysym", ["=", "K_EQUALS"])
+def test_equals_key_types_an_equals_sign(keysym):
+    """K_EQUALS was mapped to a colon, so `type "="` could not find a key."""
+
+    assert testkey.get_keycode(keysym) == (pygame.K_EQUALS, "=", 0)

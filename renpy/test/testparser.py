@@ -836,59 +836,58 @@ def parse_selector(l: Lexer, loc: NodeLocation) -> testast.Selector | None:
     return testast.DisplayableSelector(loc, screen, id, layer, focused)
 
 
-def parse_condition(l: Lexer, loc: NodeLocation, left: testast.Condition | None = None) -> testast.Condition:
+def parse_condition(l: Lexer, loc: NodeLocation) -> testast.Condition:
     """
-    Parses a condition that may start with a selector, or
-    have one or more "and", "or", "not", or parenthesized conditions.
+    Parses a condition that may start with a selector, or have one or more "and", "or", "not",
+    or parenthesized conditions. The operators bind as they do in Python.
     """
+
+    rv = parse_and_condition(l, loc)
+
+    while l.keyword("or"):
+        rv = testast.Or(loc, rv, parse_and_condition(l, loc))
+
+    return rv
+
+
+def parse_and_condition(l: Lexer, loc: NodeLocation) -> testast.Condition:
+    rv = parse_not_condition(l, loc)
+
+    while l.keyword("and"):
+        rv = testast.And(loc, rv, parse_not_condition(l, loc))
+
+    return rv
+
+
+def parse_not_condition(l: Lexer, loc: NodeLocation) -> testast.Condition:
     if l.keyword("not"):
-        right = parse_condition(l, loc)
-        return testast.Not(loc, right)
+        return testast.Not(loc, parse_not_condition(l, loc))
 
-    elif l.keyword("and"):
-        if left is None:
-            l.error('Expected a left-hand side for "and" condition.')
-        right = parse_condition(l, loc)
-        return testast.And(loc, left, right)
+    if l.match(r"\("):
+        rv = parse_condition(l, loc)  # Ensure we are at the start of a condition
+        l.require(r"\)")
 
-    elif l.keyword("or"):
-        if left is None:
-            l.error('Expected a left-hand side for "or" condition.')
-        right = parse_condition(l, loc)
-        return testast.Or(loc, left, right)
+    elif l.keyword("True"):
+        rv = testast.Eval(loc, "True")
+
+    elif l.keyword("False"):
+        rv = testast.Eval(loc, "False")
+
+    elif l.keyword("eval"):
+        source = l.require(l.simple_expression)
+        rv = testast.Eval(loc, source)
+
+    elif l.keyword("label"):
+        name = l.simple_expression(operator=False) or l.require(l.label_name)
+        rv = testast.Label(loc, name)
+
+    elif rv := parse_selector(l, loc):
+        pass
 
     else:
-        if l.match(r"\("):
-            rv = parse_condition(l, loc)  # Ensure we are at the start of a condition
-            l.require(r"\)")
+        l.error("Invalid condition.")
 
-        elif l.keyword("True"):
-            rv = testast.Eval(loc, "True")
-
-        elif l.keyword("False"):
-            rv = testast.Eval(loc, "False")
-
-        elif l.keyword("eval"):
-            source = l.require(l.simple_expression)
-            rv = testast.Eval(loc, source)
-
-        elif l.keyword("label"):
-            name = l.simple_expression(operator=False) or l.require(l.label_name)
-            rv = testast.Label(loc, name)
-
-        elif rv := parse_selector(l, loc):
-            pass
-
-        else:
-            l.error("Invalid condition.")
-
-        ## Check if we have another condition after this one
-        old_pos = l.pos
-        if l.keyword("and") or l.keyword("or"):
-            l.pos = old_pos
-            rv = parse_condition(l, loc, left=rv)
-
-        return rv
+    return rv
 
 
 def parse_until(l: Lexer, loc: NodeLocation, left: testast.Node) -> testast.Until | None:

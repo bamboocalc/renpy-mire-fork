@@ -125,12 +125,13 @@ def find_position(f: Focus | Displayable | None, position: Position | tuple[None
         if posx is not None:
             x = relative_to_absolute(posx, f.w) + f.x
         else:
-            x = random.randrange(f.x, f.x + f.w)
+            # A focus narrower than a pixel still has the pixel it starts on.
+            x = random.randrange(f.x, f.x + max(f.w, 1))
 
         if posy is not None:
             y = relative_to_absolute(posy, f.h) + f.y
         else:
-            y = random.randrange(f.y, f.y + f.h)
+            y = random.randrange(f.y, f.y + max(f.h, 1))
 
         nf = renpy.display.render.focus_at_point(x, y)  # type: ignore
 

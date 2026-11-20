@@ -37,9 +37,13 @@ class TestFilterSegment:
     parameters: dict[str, Any]
     pattern: re.Pattern | None = None
 
-    def __init__(self, raw_text: str) -> None:
+    def __init__(self, raw_text: str, parameters: dict[str, Any] | None = None) -> None:
         self.raw_text = raw_text
-        self.name, self.parameters = self._parse_filter_segment()
+
+        if parameters is None:
+            self.name, self.parameters = self._parse_filter_segment()
+        else:
+            self.name, self.parameters = raw_text, parameters
 
     def _parse_filter_segment(self) -> tuple[str, dict[str, Any]]:
         text = self.raw_text.strip()
@@ -50,7 +54,7 @@ class TestFilterSegment:
             return text, {}
 
         name, params_expr = text.split("(", 1)
-        params_expr = params_expr.rstrip(")")
+        params_expr = params_expr.removesuffix(")")
 
         try:
             expression = ast.parse(f"_({params_expr})", mode="eval")
@@ -99,9 +103,9 @@ class TestFilter:
     segments: list[TestFilterSegment]
     "The testcase or testsuite nodes that this filter resolves to."
 
-    def __init__(self, raw: str):
+    def __init__(self, raw: str, segments: list[TestFilterSegment] | None = None):
         self.raw = raw
-        self.segments = self.parse_filter_text()
+        self.segments = self.parse_filter_text() if segments is None else segments
 
     def matches(self, other: TestFilter, exact: bool = False, is_parent: bool = False) -> bool:
         """
@@ -243,23 +247,21 @@ class ExecutionFilter:
 
         is_parent = (testcase not in self.matched_nodes) and (testcase in self.parent_nodes)
 
-        node_filter = get_test_filter(testcase.current_full_parameterized_path)
+        node_filter = get_node_filter(testcase)
         for include_filter in self.include_filters:
-            if include_filter.matches(node_filter, exact, is_parent):
-                # Make sure that the specific parameter keywords actually exist in the node
-                # Can be an issue for wildcard filters like "math.*(a=3)"
-                nodes = testcase.get_parent_chain() + [testcase]
-                for node, segment in zip(nodes, include_filter.segments):
-                    if segment.parameters and not node.parameters:
-                        return False
+            if not include_filter.matches(node_filter, exact, is_parent):
+                continue
 
-                    if not segment.parameters:
-                        continue
+            # Make sure that the specific parameter keywords actually exist in the node
+            # Can be an issue for wildcard filters like "math.*(a=3)"
+            nodes = testcase.get_parent_chain() + [testcase]
+            for node, segment in zip(nodes, include_filter.segments):
+                if not segment.parameters:
+                    continue
 
-                    node_keys = set(node.parameters[0].keys())
-                    segment_keys = set(segment.parameters.keys())
-                    if not segment_keys.issubset(node_keys):
-                        return False
+                if not node.parameters or not set(segment.parameters).issubset(node.parameters[0]):
+                    break
+            else:
                 return True
 
         return False
@@ -271,3 +273,19 @@ def get_test_filter_segment(raw_text: str) -> TestFilterSegment:
 @functools.cache
 def get_test_filter(raw_text: str) -> TestFilter:
     return TestFilter(raw_text)
+
+
+def get_node_filter(testcase: TestCase) -> TestFilter:
+    """
+    Returns a filter for the current parameters of `testcase` and its parents. It's built from the
+    parameter values, since their reprs needn't parse back into literals.
+    """
+
+    segments = []
+
+    for node in testcase.get_parent_chain() + [testcase]:
+        index = node.parameter_index
+        parameters = node.parameters[index] if 0 <= index < len(node.parameters) else {}
+        segments.append(TestFilterSegment(node.name, parameters))
+
+    return TestFilter(testcase.current_full_parameterized_path, segments)
