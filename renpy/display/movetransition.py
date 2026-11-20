@@ -423,7 +423,7 @@ class MoveInterpolate(renpy.display.displayable.Displayable):
         return xpos, ypos, xanchor, yanchor, xoffset, yoffset, subpixel
 
     def get_placement(self):
-        if self.st > self.delay:
+        if self.st >= self.delay:
             done = 1.0
         else:
             done = self.st / self.delay

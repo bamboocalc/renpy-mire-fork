@@ -363,6 +363,10 @@ class Viewport(renpy.display.layout.Container):
                     if rv is not None:
                         return rv
 
+        # The viewport stopped being draggable mid-drag, as when its child shrinks to fit.
+        if renpy.display.focus.get_grab() == self and self.drag_position is None:
+            renpy.display.focus.set_grab(None)
+
         if renpy.display.focus.get_grab() == self:
             old_xvalue = self.xadjustment.value
             old_yvalue = self.yadjustment.value

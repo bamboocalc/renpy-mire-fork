@@ -2,7 +2,7 @@ import pytest
 
 import renpy
 from renpy.display.layout import Null
-from renpy.display.particle import Particles, SnowBlossom
+from renpy.display.particle import Particles, SnowBlossom, SpriteManager
 
 
 def midpoint(a, b):
@@ -154,3 +154,42 @@ def test_custom_factory_receives_empty_list(st):
 
     particles.update_callback(st + 1)
     assert firsts == [True, False]
+
+
+class Recorder(renpy.display.displayable.Displayable):
+    """A duplicatable displayable that records the events it gets."""
+
+    _duplicatable = True
+
+    def __init__(self):
+        super().__init__()
+        self.seen = []
+
+    def _duplicate(self, args):
+        return Recorder()
+
+    def event(self, ev, x, y, st):
+        self.seen.append((ev, st))
+
+
+def test_sprite_manager_is_not_its_own_focus_name():
+    """The manager passed itself to Displayable.__init__, which took it as the focus name."""
+
+    assert SpriteManager().focus_name is None
+
+
+def test_sprite_events_go_to_the_rendered_copy_once_it_has_rendered():
+    """Events went to the shared template rather than the copy that renders, and an unrendered sprite raised TypeError."""
+
+    manager = SpriteManager()
+    template = Recorder()
+    sprite = manager.create(template)
+    sprite.events = True
+
+    assert manager.event("click", 0, 0, 1.0) is None
+
+    sprite.cache.st = 0.25
+    manager.event("click", 0, 0, 1.0)
+
+    assert sprite.cache.child_copy.seen == [("click", 0.75)]
+    assert template.seen == []

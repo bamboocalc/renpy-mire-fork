@@ -984,12 +984,12 @@ class CropMove(Transition):
         if renpy.game.less_updates:
             return null_render(self, width, height, st, at)
 
-        time = 1.0 * st / self.time
-
-        # Done rendering.
-        if time >= 1.0:
+        # Done rendering. This is checked first, so a time of 0 doesn't divide by zero.
+        if st >= self.time:
             self.events = True
             return render(self.new_widget, width, height, st, at)
+
+        time = 1.0 * st / self.time
 
         # How we scale each element of a tuple.
         scales = (width, height, width, height)
@@ -1097,12 +1097,12 @@ class PushMove(Transition):
         if renpy.game.less_updates:
             return null_render(self, width, height, st, at)
 
-        time = 1.0 * st / self.time
-
-        # Done rendering.
-        if time >= 1.0:
+        # Done rendering. This is checked first, so a time of 0 doesn't divide by zero.
+        if st >= self.time:
             self.events = True
             return render(self.new_widget, width, height, st, at)
+
+        time = 1.0 * st / self.time
 
         # How we scale each element of a tuple.
         scales = (width, height, width, height)

@@ -507,6 +507,9 @@ class Drag(renpy.display.displayable.Displayable, renpy.revertable.RevertableObj
         self.target_x = x
         self.target_y = y
 
+        # A delay replaces this when the drag renders; without one, the snap finishes then, ending any snap in progress.
+        self.target_at = self.at
+
         if self.x is not None:
             self.target_at_delay = delay
             self.snap_warper = warper
@@ -514,7 +517,6 @@ class Drag(renpy.display.displayable.Displayable, renpy.revertable.RevertableObj
             self.snap_start_y = self.y
             self.snapping = True
         else:
-            self.target_at = self.at
             self.x = x
             self.y = y
 
@@ -962,6 +964,7 @@ class Drag(renpy.display.displayable.Displayable, renpy.revertable.RevertableObj
                     if rv is not None:
                         self.grab_x = None
                         self.grab_y = None
+                        self.drag_moved = False
                         return rv
 
                 # Call the drop callback.
@@ -970,6 +973,7 @@ class Drag(renpy.display.displayable.Displayable, renpy.revertable.RevertableObj
                     if rv is not None:
                         self.grab_x = None
                         self.grab_y = None
+                        self.drag_moved = False
                         return rv
 
             else:

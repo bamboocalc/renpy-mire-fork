@@ -76,3 +76,30 @@ def test_explicit_vertical_entrance_is_interpolated(st, expected):
     x, y = place(1000, 500, 100, 80, move.get_placement())
     assert x == pytest.approx(expected[0], abs=1e-7)
     assert y == pytest.approx(expected[1], abs=1e-7)
+
+
+def test_zero_time_move_ends_at_its_destination():
+    """A move with no duration divided 0 by 0 on its first placement."""
+
+    image = Transform(xpos=0.46, ypos=-0.16, xanchor=0.5, yanchor=0.25)
+    entrance = Transform(image, xpos=1.0, xanchor=0.0, ypos=1.0, yanchor=1.0)
+    move = make_move(entrance, image, None)
+    move.delay = 0.0
+    move.st = 0.0
+
+    x, y = place(1000, 500, 100, 80, move.get_placement())
+    assert (x, y) == pytest.approx((410, -100), abs=1e-7)
+
+
+@pytest.mark.parametrize("transition", ["PushMove", "CropMove"])
+def test_zero_time_slides_show_the_new_screen(mocker, transition):
+    """PushMove and CropMove divided by their time before checking whether they had finished."""
+
+    from renpy.display import transition as module
+    from renpy.display.layout import Null
+
+    mocker.patch.object(module, "render", return_value="new")
+    move = getattr(module, transition)(0, old_widget=Null(), new_widget=Null())
+
+    assert move.render(100, 100, 0.0, 0.0) == "new"
+    assert move.events

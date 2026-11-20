@@ -236,7 +236,7 @@ class SpriteManager(renpy.display.displayable.Displayable):
         SpriteManagers have the following methods:
         """
 
-        super(SpriteManager, self).__init__(self, **properties)
+        super(SpriteManager, self).__init__(**properties)
 
         self.update_function = update
         self.event_function = event
@@ -380,8 +380,9 @@ class SpriteManager(renpy.display.displayable.Displayable):
         for i in range(len(self.children) - 1, -1, -1):
             s = self.children[i]
 
-            if s.events:
-                rv = s.cache.child.event(ev, x - s.x, y - s.y, st - s.cache.st)
+            # A sprite that hasn't rendered yet can't be under the pointer, and has no start time.
+            if s.events and s.cache.st is not None:
+                rv = s.cache.child_copy.event(ev, x - s.x, y - s.y, st - s.cache.st)
                 if rv is not None:
                     return rv
 

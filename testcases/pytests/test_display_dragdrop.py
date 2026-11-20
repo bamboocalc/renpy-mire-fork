@@ -95,3 +95,40 @@ def test_joined_move_updates_each_position_before_callback(mocker, result):
     assert group.positions["1"] == (25, 37, second.old_position)
     for drag in (first, second):
         assert (drag.target_x, drag.target_y) == (drag.x, drag.y)
+
+
+def test_drag_that_ends_the_interaction_is_no_longer_moving(mocker):
+    """A dragged callback that returned a value left drag_moved set, so later hovers showed drop targets."""
+
+    drag = make_drag(mocker, dragged=lambda drags, drop: "done")
+    drag.parent_width = drag.parent_height = 200
+    drag.w = drag.h = 10
+    drag.grab_x = drag.grab_y = drag.start_x = drag.start_y = 0
+    drag.drag_moved = True
+
+    mocker.patch.object(renpy.display.focus, "get_grab", return_value=drag)
+    mocker.patch.object(renpy.display.focus, "set_grab")
+    mocker.patch.object(dragdrop, "map_event", side_effect=lambda ev, name: name == "drag_deactivate")
+    mocker.patch.object(dragdrop, "redraw")
+    mocker.patch.object(drag, "update_style_prefix")
+    mocker.patch.object(drag, "set_style_prefix")
+
+    event = renpy.pygame.event.Event(renpy.pygame.MOUSEBUTTONUP, button=1, pos=(5, 7))
+    assert drag.event(event, 5, 7, 0) == "done"
+    assert not drag.drag_moved
+
+
+def test_snap_without_delay_ends_a_snap_in_progress(mocker):
+    """A snap with no delay kept animating over what was left of the previous snap's time."""
+
+    mocker.patch.object(dragdrop, "redraw")
+    drag = Drag(Null())
+    drag.x = drag.y = 0
+    drag.at = 1.0
+
+    drag.snap(100, 100, delay=2.0)
+    drag.target_at = 3.0
+
+    drag.snap(50, 50)
+
+    assert drag.target_at <= drag.at
