@@ -674,7 +674,9 @@ cdef class HBFont:
         else:
             self.hinting = FT_LOAD_FORCE_AUTOHINT | FT_LOAD_TARGET_NORMAL
 
+        # The face is shared; setup() skips resizing when the recorded size already matches.
         FT_Set_Char_Size(self.face_object.face, 0, <int> (self.size * 64), 0, 0)
+        self.face_object.size = self.size
 
 
     cdef setup_variations(self):
@@ -846,7 +848,8 @@ cdef class HBFont:
         if rv.index == index:
             return rv
 
-        rv.index = index
+        # A failed load must not leave this slot claiming the glyph with another glyph's bitmap.
+        rv.index = -1
 
         error = FT_Load_Glyph(face, index, self.hinting | FT_LOAD_COLOR)
         if error:
@@ -874,7 +877,8 @@ cdef class HBFont:
                 if error:
                     raise FreetypeError(error)
 
-                if self.italic:
+                # Only outline glyphs can be transformed; SVG glyphs would be misread as outlines.
+                if self.italic and face.glyph.format == FT_GLYPH_FORMAT_OUTLINE:
                     shear.xx = 1 << 16
                     shear.xy = (207 << 16) // 1000 # taken from SDL_ttf.
                     shear.yx = 0
@@ -882,7 +886,7 @@ cdef class HBFont:
 
                     FT_Outline_Transform(&(<FT_OutlineGlyph> g).outline, &shear)
 
-                if self.vertical:
+                if self.vertical and face.glyph.format == FT_GLYPH_FORMAT_OUTLINE:
                     shear.xx = 0
                     shear.xy = -(1 << 16)
                     shear.yx = 1 << 16
@@ -893,9 +897,13 @@ cdef class HBFont:
                     FT_Glyph_Stroke(&g, self.stroker, 1)
 
                 if self.antialias:
-                    FT_Glyph_To_Bitmap(&g, FT_RENDER_MODE_NORMAL, NULL, 1)
+                    error = FT_Glyph_To_Bitmap(&g, FT_RENDER_MODE_NORMAL, NULL, 1)
                 else:
-                    FT_Glyph_To_Bitmap(&g, FT_RENDER_MODE_MONO, NULL, 1)
+                    error = FT_Glyph_To_Bitmap(&g, FT_RENDER_MODE_MONO, NULL, 1)
+
+                if error:
+                    FT_Done_Glyph(g)
+                    raise FreetypeError(error)
 
                 bg = <FT_BitmapGlyph> g
                 bitmap = bg.bitmap
@@ -939,6 +947,7 @@ cdef class HBFont:
         if g != NULL:
             FT_Done_Glyph(g)
 
+        rv.index = index
         return rv
 
     def glyphs(self, str s, int level):
@@ -1165,7 +1174,7 @@ cdef class HBFont:
                 pxstart = 0
 
             rows = min(cache.bitmap.rows, surf.h - bmy)
-            width = min(cache.bitmap.width, surf.w - bmx)
+            width = min(cache.bitmap.width - pxstart, surf.w - bmx)
 
             underline_end = min(underline_end, surf.w - 1)
 
@@ -1180,7 +1189,7 @@ cdef class HBFont:
                             continue
 
                         line = pixels + bmy * pitch + bmx * 4
-                        gline = cache.bitmap.buffer + py * cache.bitmap.pitch + pxstart
+                        gline = cache.bitmap.buffer + py * cache.bitmap.pitch + pxstart * 4
 
                         for px in range(width):
 
@@ -1189,10 +1198,10 @@ cdef class HBFont:
                             Gr = gline[2]
                             Ga = gline[3]
 
-                            line[0] = line[0] * (1 - Ga) // 255 + Gr
-                            line[1] = line[1] * (1 - Ga) // 255 + Gg
-                            line[2] = line[2] * (1 - Ga) // 255 + Gb
-                            line[3] = line[3] * (1 - Ga) // 255 + Ga
+                            line[0] = line[0] * (255 - Ga) // 255 + Gr
+                            line[1] = line[1] * (255 - Ga) // 255 + Gg
+                            line[2] = line[2] * (255 - Ga) // 255 + Gb
+                            line[3] = line[3] * (255 - Ga) // 255 + Ga
 
                             gline += 4
                             line += 4
@@ -1245,8 +1254,8 @@ cdef class HBFont:
                 ly = y - self.underline_offset - 1
                 lh = self.underline_height * underline
 
-                for py in range(ly, min(ly + lh, surf.h)):
-                    for px in range(underline_x, underline_end):
+                for py in range(max(ly, 0), min(ly + lh, surf.h)):
+                    for px in range(max(underline_x, 0), underline_end):
                         line = pixels + py * pitch + px * 4
 
                         line[0] = Sr * Sa // 255
@@ -1261,8 +1270,8 @@ cdef class HBFont:
                 if lh < 1:
                     lh = 1
 
-                for py in range(ly, (ly + lh)):
-                    for px in range(underline_x, underline_end):
+                for py in range(max(ly, 0), min(ly + lh, surf.h)):
+                    for px in range(max(underline_x, 0), underline_end):
                         line = pixels + py * pitch + px * 4
 
                         line[0] = Sr * Sa // 255

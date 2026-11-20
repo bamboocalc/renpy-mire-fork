@@ -73,3 +73,22 @@ def test_streamed_face_survives_dropped_loader_file(
 
     assert len(glyphs) > 0
     assert any(g.width > 0 for g in glyphs)
+
+
+def test_new_size_of_a_shared_face_does_not_resize_existing_fonts(mocker: MockerFixture) -> None:
+    """Creating a larger font of the same face must not make an earlier font draw new glyphs at that size."""
+
+    mocker.patch.object(renpy.loader, "load", side_effect=lambda fn, directory=None: open_buffer())
+    mocker.patch.dict(font.face_cache, clear=True)
+    mocker.patch.dict(font.font_cache, clear=True)
+
+    def get(size):
+        return font.get_font("test.ttf", size, False, False, 0, True, False, "auto", 1.0, "harfbuzz", None, {}, {})
+
+    expected = [g.width for g in get(20).glyphs("MW", 0)]
+    font.font_cache.clear()
+
+    small = get(20)
+    small.glyphs("a", 0)
+    get(60)
+    assert [g.width for g in small.glyphs("MW", 0)] == expected

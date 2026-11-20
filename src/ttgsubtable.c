@@ -175,7 +175,7 @@ int GetVerticalGlyphSub(TTGSUBTable *table, uint32_t glyphnum, uint32_t *vglyphn
     for(i = 0; i < Feature->LookupCount; i++)
     {
         index = Feature->LookupListIndex[i];
-        if(index < 0 || table->LookupList.LookupCount < index)
+        if(index < 0 || table->LookupList.LookupCount <= index)
         {
             continue;
         }
@@ -240,7 +240,7 @@ int GetCoverageIndex(TTGSUBTable *table, TCoverageFormat *Coverage, uint32_t g)
             uint32_t s = Coverage->RangeRecord[i].Start;
             uint32_t e = Coverage->RangeRecord[i].End;
             uint32_t si = Coverage->RangeRecord[i].StartCoverageIndex;
-            if(si + s <= g && g <= si + e)
+            if(s <= g && g <= e)
             {
                 return si + g - s;
             }
