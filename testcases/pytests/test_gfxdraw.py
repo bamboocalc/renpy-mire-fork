@@ -91,3 +91,23 @@ def test_circle_flushes_full_and_partial_point_batches():
     pygame.gfxdraw.circle(surface, 64.25, 63.75, 63, (19, 117, 243, 255))
     pixels = bytes(channel for y in range(129) for x in range(129) for channel in surface.get_at((x, y)))
     assert hashlib.sha256(pixels).hexdigest() == "67ea5702c32c1b8f55ebd5631bbcd72848276234e96937603b39d21d076891ae"
+
+
+@pytest.mark.parametrize("points", [[(0, 0), (3, 0), (3, "y")], [(0, 0), (3, 0), (1, 2, 3)]], ids=["type", "length"])
+def test_polygon_with_a_bad_point_raises_without_drawing(points):
+    """A point that can't be converted raises after the coordinate buffers are freed, and nothing is drawn."""
+
+    surface = pygame.Surface((4, 4), pygame.SRCALPHA, 32)
+
+    with pytest.raises((TypeError, ValueError)):
+        pygame.gfxdraw.filled_polygon(surface, points, (255, 0, 0, 255))
+
+    assert {tuple(surface.get_at((x, y))) for y in range(4) for x in range(4)} == {(0, 0, 0, 0)}
+
+
+def test_polygon_without_points_draws_nothing():
+    surface = pygame.Surface((4, 4), pygame.SRCALPHA, 32)
+
+    pygame.gfxdraw.filled_polygon(surface, [], (255, 0, 0, 255))
+
+    assert {tuple(surface.get_at((x, y))) for y in range(4) for x in range(4)} == {(0, 0, 0, 0)}

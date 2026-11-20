@@ -26,6 +26,26 @@ from .color cimport Color
 from .error import error
 from .rect import Rect
 
+cdef int load_points(points, float **vx, float **vy) except -1:
+    cdef size_t n, num_points = len(points)
+
+    # One extra element keeps malloc(0) from returning NULL for an empty point list.
+    vx[0] = <float*>malloc((num_points + 1) * sizeof(float))
+    vy[0] = <float*>malloc((num_points + 1) * sizeof(float))
+
+    try:
+        if vx[0] == NULL or vy[0] == NULL:
+            raise MemoryError()
+
+        for n in range(num_points):
+            vx[0][n], vy[0][n] = points[n]
+    except:
+        free(vx[0])
+        free(vy[0])
+        raise
+
+    return 0
+
 cdef class GFXCanvas:
     cdef Surface surface
     cdef SDL_Renderer* renderer
@@ -154,64 +174,59 @@ cdef class GFXCanvas:
         cdef float *vx
         cdef float *vy
         cdef size_t num_points = len(points)
-        vx = <float*>malloc(num_points * sizeof(float))
-        vy = <float*>malloc(num_points * sizeof(float))
-        for n, pt in zip(range(num_points), points):
-            vx[n], vy[n] = points[n]
-        polygonRGBA(self.renderer, vx, vy, num_points, c.r, c.g, c.b, c.a)
-        free(vx)
-        free(vy)
+        load_points(points, &vx, &vy)
+        try:
+            polygonRGBA(self.renderer, vx, vy, num_points, c.r, c.g, c.b, c.a)
+        finally:
+            free(vx)
+            free(vy)
 
     def aapolygon(self, points, color):
         cdef Color c = Color(color)
         cdef float *vx
         cdef float *vy
         cdef size_t num_points = len(points)
-        vx = <float*>malloc(num_points * sizeof(float))
-        vy = <float*>malloc(num_points * sizeof(float))
-        for n, pt in zip(range(num_points), points):
-            vx[n], vy[n] = points[n]
-        aapolygonRGBA(self.renderer, vx, vy, num_points, c.r, c.g, c.b, c.a)
-        free(vx)
-        free(vy)
+        load_points(points, &vx, &vy)
+        try:
+            aapolygonRGBA(self.renderer, vx, vy, num_points, c.r, c.g, c.b, c.a)
+        finally:
+            free(vx)
+            free(vy)
 
     def filled_polygon(self, points, color):
         cdef Color c = Color(color)
         cdef float *vx
         cdef float *vy
         cdef size_t num_points = len(points)
-        vx = <float*>malloc(num_points * sizeof(float))
-        vy = <float*>malloc(num_points * sizeof(float))
-        for n, pt in zip(range(num_points), points):
-            vx[n], vy[n] = points[n]
-        filledPolygonRGBA(self.renderer, vx, vy, num_points, c.r, c.g, c.b, c.a)
-        free(vx)
-        free(vy)
+        load_points(points, &vx, &vy)
+        try:
+            filledPolygonRGBA(self.renderer, vx, vy, num_points, c.r, c.g, c.b, c.a)
+        finally:
+            free(vx)
+            free(vy)
 
     def textured_polygon(self, points, Surface texture not None, tx, ty):
         cdef float *vx
         cdef float *vy
         cdef size_t num_points = len(points)
-        vx = <float*>malloc(num_points * sizeof(float))
-        vy = <float*>malloc(num_points * sizeof(float))
-        for n, pt in zip(range(num_points), points):
-            vx[n], vy[n] = points[n]
-        texturedPolygon(self.renderer, vx, vy, num_points, texture.sdl_surface, tx, ty)
-        free(vx)
-        free(vy)
+        load_points(points, &vx, &vy)
+        try:
+            texturedPolygon(self.renderer, vx, vy, num_points, texture.sdl_surface, tx, ty)
+        finally:
+            free(vx)
+            free(vy)
 
     def bezier(self, points, steps, color):
         cdef Color c = Color(color)
         cdef float *vx
         cdef float *vy
         cdef size_t num_points = len(points)
-        vx = <float*>malloc(num_points * sizeof(float))
-        vy = <float*>malloc(num_points * sizeof(float))
-        for n, pt in zip(range(num_points), points):
-            vx[n], vy[n] = points[n]
-        bezierRGBA(self.renderer, vx, vy, num_points, steps, c.r, c.g, c.b, c.a)
-        free(vx)
-        free(vy)
+        load_points(points, &vx, &vy)
+        try:
+            bezierRGBA(self.renderer, vx, vy, num_points, steps, c.r, c.g, c.b, c.a)
+        finally:
+            free(vx)
+            free(vy)
 
 def pixel(Surface surface, x, y, color):
     cdef GFXCanvas canvas = GFXCanvas(surface)

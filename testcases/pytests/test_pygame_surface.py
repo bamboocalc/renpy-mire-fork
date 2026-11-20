@@ -260,3 +260,13 @@ def test_get_buffer_of_empty_surface_is_empty(size):
     """
 
     assert len(pygame.Surface(size).get_buffer()) == 0
+
+
+def test_fill_clips_a_rect_above_the_surface_by_its_height():
+    """A rect starting above the surface had its width reduced instead of its height."""
+
+    surface = pygame.Surface((4, 4), pygame.SRCALPHA, 32)
+
+    assert tuple(surface.fill((255, 0, 0, 255), (0, -2, 3, 4))) == (0, 0, 3, 2)
+    assert tuple(surface.get_at((2, 1))) == (255, 0, 0, 255)
+    assert tuple(surface.get_at((0, 2))) == (0, 0, 0, 0)

@@ -612,7 +612,7 @@ cdef class Surface:
                 sdl_rect.x = 0
 
             if sdl_rect.y < 0:
-                sdl_rect.w = sdl_rect.h + sdl_rect.y
+                sdl_rect.h = sdl_rect.h + sdl_rect.y
                 sdl_rect.y = 0
 
             if sdl_rect.w <= 0 or sdl_rect.h <= 0:

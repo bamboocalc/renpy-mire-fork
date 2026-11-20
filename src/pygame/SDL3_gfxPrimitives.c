@@ -2759,7 +2759,7 @@ bool filledPolygonRGBAMT(SDL_Renderer * renderer, const float * vx, const float 
 		if (gfxPrimitivesPolyAllocated < n) {
 			gfxPrimitivesPolyIntsNew = (Sint32 *) realloc(gfxPrimitivesPolyInts, sizeof(int) * n);
 			if (!gfxPrimitivesPolyIntsNew) {
-				if (!gfxPrimitivesPolyInts) {
+				if (gfxPrimitivesPolyInts) {
 					free(gfxPrimitivesPolyInts);
 					gfxPrimitivesPolyInts = NULL;
 				}
