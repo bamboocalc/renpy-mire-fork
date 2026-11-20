@@ -416,7 +416,6 @@ class DeformPrimitive:
             count, normals, tangents, uv0, uv1, colors, 3 if color_kind == "VEC3" and color_index is not None else 4)
         self.uv_sets = frozenset(i for i in (0, 1) if "TEXCOORD_" + str(i) in attributes)
         self.triangles = array.array("I", (i for a, b, c in triangles for i in (a, c, b)))
-        self.material = primitive.get("material", len(reader.document.get("materials", [])))
         targets = primitive.get("targets", [])
         self.target_count = len(targets)
         self.targets = array.array("f")

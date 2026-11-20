@@ -1021,6 +1021,51 @@ def test_morph_overrides_are_independent_of_shared_bind_pose(deform_model):
     assert asset.pose((), None, 0, False, 100, include_weights=True)[2][1] == (0, 0)
 
 
+def test_deformation_uses_the_native_default_material_beside_unused_materials(deform_model):
+    """Assimp imports only referenced materials, so its default material can sit below the authored material count."""
+    def edit(document):
+        document["materials"].insert(0, {"name": "Unused"})
+        del document["meshes"][0]["primitives"][0]["material"]
+    mesh_info = deform_model(edit).load().mesh_info[0]
+    assert mesh_info.material_index == 0
+    assert mesh_info.uniforms["u_color_base"] == (1, 1, 1, 1)
+
+
+def test_deformation_keeps_a_rest_pose_triangle_with_zero_area(deform_model):
+    """A morph can open a triangle that is collapsed at rest; Assimp must not split it into a line primitive."""
+    def edit(document):
+        data = bytearray(base64.b64decode(document["buffers"][0]["uri"].partition(",")[2]))
+        start = document["bufferViews"][document["accessors"][0]["bufferView"]].get("byteOffset", 0)
+        data[start + 24:start + 36] = data[start + 12:start + 24]
+        document["buffers"][0]["uri"] = "data:application/octet-stream;base64," + base64.b64encode(bytes(data)).decode()
+    data = deform_model(edit).load()
+    assert len(data.mesh_info[0].mesh.get_points()) == 4
+
+
+def test_camera_keeps_a_source_that_is_not_drawn_predicted(deform_model, mocker):
+    """A source used only for its camera would otherwise count as inactive and be evicted after each prediction."""
+    source = deform_model()
+    camera = assimp.GLTFCamera(source, renpy.display.layout.Null())
+    mocker.patch.object(assimp, "new_predicted", set())
+    mocker.patch.object(renpy.display.render, "render", return_value=Render(1, 1))
+    camera.render(400, 300, 0, 0)
+    assert source in assimp.new_predicted
+
+
+def test_scene_predicts_environment_and_shadow_passes_without_inherited_parts(mocker):
+    """Environment filtering and shadow tiles draw in their own targets, never under cascades or peeling."""
+    predict = mocker.patch.object(renpy.gl2.gl2shadercache, "predict_shader")
+    scene = assimp.GLTFScene(renpy.display.layout.Null(), environment="room.png", shadow_cascades=2, transparency_layers=2)
+    scene.predict_shaders(())
+    predicted = [call.args[0] for call in predict.call_args_list]
+    assert ("renpy.gltf.environment",) in predicted
+    assert ("renpy.gltf.shadow",) in predicted and ("renpy.gltf.shadow_copy",) in predicted
+    predict.reset_mock()
+    assimp.GLTFScene(renpy.display.layout.Null(), shadows=False).predict_shaders(())
+    predicted = [call.args[0] for call in predict.call_args_list]
+    assert ("renpy.gltf.shadow",) not in predicted and ("renpy.gltf.shadow_copy",) not in predicted
+
+
 def append_deformation_accessor(document, values, kind, component=5126):
     """Add one small independent data URI, keeping source vertex identities and native file I/O intact."""
     formats = {5126: "f", 5121: "B"}

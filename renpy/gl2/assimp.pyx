@@ -48,6 +48,7 @@ from assimpapi cimport (
     aiProcess_FindInvalidData,
     aiProcess_ValidateDataStructure,
     aiProcess_SplitLargeMeshes,
+    aiProcess_FindDegenerates,
 
     aiScene,
     aiMesh,
@@ -337,8 +338,9 @@ class ModelData:
 
     def deformation_bytes(self):
         """Latest per-instance poses belong to the same import-cache budget and disappear with weak owners."""
+        # Preload threads total this while the render thread adds poses; list() copies each dict without yielding the GIL.
         return sum(mesh.points * (3 + mesh.layout.stride) * 4 + mesh.triangles * 12
-            for entries in self.deformed.values() for signature, mesh in entries.values())
+            for entries in list(self.deformed.data.values()) for signature, mesh in list(entries.values()))
 
     @property
     def memory_size(self):
@@ -784,8 +786,8 @@ cdef class Loader:
             flags &= ~(aiProcess_RemoveRedundantMaterials | aiProcess_FindInvalidData)
             flags |= aiProcess_ValidateDataStructure
         if scene and model_data.asset.geometries:
-            # Source primitive identities must survive alongside the direct deformation streams.
-            flags &= ~aiProcess_SplitLargeMeshes
+            # Source primitive identities must survive; FindDegenerates splits off triangles collapsed at rest.
+            flags &= ~(aiProcess_SplitLargeMeshes | aiProcess_FindDegenerates)
 
         # File callbacks reacquire the GIL; native import and postprocessing need not hold it.
         self.import_data = renpy.gl2.gltfscene.material_import_document(self.document, filename) if scene and model_data.asset.geometries else None
@@ -1212,8 +1214,8 @@ cdef class Loader:
             raise ValueError("Assimp changed a deforming glTF primitive's source identity.")
         for i in range(node.mNumMeshes):
             key = source_mesh, i
-            mesh_info = (self.load_source_mesh(key) if direct and key in self.model_data.asset.geometries
-                else self.load_mesh(node.mMeshes[i]))
+            mesh_info = (self.load_source_mesh(key, self.scene.mMeshes[node.mMeshes[i]].mMaterialIndex)
+                if direct and key in self.model_data.asset.geometries else self.load_mesh(node.mMeshes[i]))
 
             if mesh_info is None:
                 continue
@@ -1231,14 +1233,15 @@ cdef class Loader:
             self.load_node(node.mChildren[i], matrix, children[i] if source_index >= 0 else -1)
 
 
-    def load_source_mesh(self, key):
+    def load_source_mesh(self, key, material_index):
         """Keep morph/joint identities independent of native vertex deduplication and bone limits."""
         cache_key = ("source", key)
         if cache_key in self.mesh_info:
             return self.mesh_info[cache_key]
         source = self.model_data.asset.geometries[key]
         mesh = _deform_geometry(source, (0,) * source.target_count, ())
-        info = MeshInfo(self, mesh, source.material, self.textures)
+        # Assimp numbers only the materials it imports, so an authored index can exceed its table.
+        info = MeshInfo(self, mesh, material_index, self.textures)
         info.deformation = source
         for uniform in info.texture_uniforms:
             binding = "u_material_" + uniform[6:]
@@ -1302,8 +1305,8 @@ cdef class Loader:
 
         # The copies are plain C, so the main thread can draw while a preload thread imports.
         with nogil:
-            if self.material:
-                memset(attribute, 0, mesh.mNumVertices * stride * sizeof(float))
+            # Missing UVs, normals, or tangents read as zero rather than uninitialized heap memory.
+            memset(attribute, 0, mesh.mNumVertices * stride * sizeof(float))
             for i in range(mesh.mNumVertices):
                 point[i].x = mesh.mVertices[i].x
                 point[i].y = mesh.mVertices[i].y
@@ -2040,6 +2043,8 @@ class GLTFCamera(Displayable):
 
     def render(self, width, height, st, at):
         width, height = max(width, 1), max(height, 1)
+        # A camera-only source may never be drawn, but its import must stay predicted.
+        new_predicted.add(self.source)
         data = self.source.load()
         node = data.asset.camera_node(self.camera, self.node)
         definition = data.asset.cameras[data.asset.nodes[node]["camera"]]
@@ -2553,6 +2558,12 @@ class GLTFScene(Displayable):
         output = ("renpy.gltf.output",) + (("renpy.gltf.guard",) if self.refraction_margin else ())
         output += ("renpy.gltf.scene_depth",) if self.depth_output else ()
         renpy.gl2.gl2shadercache.predict_shader(shaders + output)
+        # Environment maps and shadow tiles draw in their own targets, without the scene's inherited parts.
+        if self.environment is not None or self.environment_fallback is not None or self.reflection_probes:
+            renpy.gl2.gl2shadercache.predict_shader(("renpy.gltf.environment",))
+        if self.shadows:
+            renpy.gl2.gl2shadercache.predict_shader(("renpy.gltf.shadow",))
+            renpy.gl2.gl2shadercache.predict_shader(("renpy.gltf.shadow_copy",))
         inherited = ("renpy.gltf.cascades",) if self.shadow_cascades > 1 else ()
         if self.colored_shadows and self.shadows and self.transmission:
             inherited += ("renpy.gltf.colored_shadows",)

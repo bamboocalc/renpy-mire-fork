@@ -106,7 +106,8 @@ init python:
             return 0.5 / max(gv + gl, 0.000001);
         }
         vec3 l__fresnel(float vh, vec3 f0, float f90) {
-            return mix(f0, vec3(f90), pow(1.0 - vh, 5.0));
+            // Rounding can push a unit-vector dot product past 1; pow of a negative base is undefined.
+            return mix(f0, vec3(f90), pow(clamp(1.0 - vh, 0.0, 1.0), 5.0));
         }
         vec2 l__sphere_uv(vec3 d) {
             float longitude = dot(d.xz, d.xz) > 0.000000000001 ? atan(d.z, d.x) : 0.0;
@@ -303,6 +304,12 @@ init python:
         v__eye = u_view_OP_inverse * (u_projection_OP_inverse * vec4(0.0, 0.0, 1.0, 0.0));
         if (u_gltf_orthographic_camera > 0.5) v__eye = u_view_OP_inverse * vec4(0.0, 0.0, 1.0, 0.0);
     """, fragment_functions=_gltf_brdf_functions + """
+        vec3 l__orthogonal_tangent(vec3 n, vec3 t) {
+            t -= n * dot(n, t);
+            // A tangent parallel to the normal has no direction; any perpendicular axis avoids normalize(0).
+            if (dot(t, t) < 0.000000000001) t = cross(n, abs(n.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0));
+            return normalize(t);
+        }
         vec2 l__uv(float coord, vec3 row0, vec3 row1) {
             vec3 uv = vec3(mix(v__uv0, v__uv1, coord), 1.0);
             return vec2(dot(row0, uv), dot(row1, uv));
@@ -508,7 +515,7 @@ init python:
                     T = (px * ty.y - py * tx.y) / determinant;
                     B = (py * tx.x - px * ty.x) / determinant;
                 }
-                T = normalize(T - N * dot(N, T));
+                T = l__orthogonal_tangent(N, T);
                 B = normalize(cross(N, T)) * (dot(cross(N, T), B) < 0.0 ? -1.0 : 1.0);
                 vec3 normal = texture(u_tex_normals, normal_uv).xyz * 2.0 - 1.0;
                 normal.xy *= u_material_normal_scale;
@@ -555,7 +562,7 @@ init python:
                 if (u_material_clearcoat_normals_present > 0.5 && (coat_authored || abs(coat_det) > 0.00000001)) {
                     vec3 T = coat_authored ? v__tangent : (px * coat_ty.y - py * coat_tx.y) / coat_det;
                     vec3 B = coat_authored ? v__bitangent : (py * coat_tx.x - px * coat_ty.x) / coat_det;
-                    T = normalize(T - coat_normal * dot(coat_normal, T));
+                    T = l__orthogonal_tangent(coat_normal, T);
                     B = normalize(cross(coat_normal, T)) * (dot(cross(coat_normal, T), B) < 0.0 ? -1.0 : 1.0);
                     vec3 normal = texture(u_tex_clearcoat_normals, coat_uv).xyz * 2.0 - 1.0;
                     normal.xy *= u_material_clearcoat_normal_scale;
@@ -563,7 +570,7 @@ init python:
                 }
                 coat_normal *= side;
                 float coat_nv = max(dot(coat_normal, V), 0.00001);
-                float coat_weight = coat * (0.04 + 0.96 * pow(1.0 - coat_nv, 5.0));
+                float coat_weight = coat * (0.04 + 0.96 * pow(clamp(1.0 - coat_nv, 0.0, 1.0), 5.0));
                 float coat_a = max(coat_roughness * coat_roughness, 0.045 * 0.045);
                 vec3 coat_lighting = vec3(0.0);
             #endif
@@ -872,7 +879,7 @@ init python:
             float weight = clamp(u_material_specular_factor * texture(u_tex_specular, v__specular_uv).a, 0.0, 1.0);
             if (ior <= 1.0) weight = 0.0;
             vec3 specular = u_material_specular_color_factor * texture(u_tex_specular_color, v__specular_color_uv).rgb;
-            vec3 fresnel = mix(min(vec3(f0) * specular, vec3(1.0)), vec3(1.0), pow(1.0 - cosine, 5.0)) * weight;
+            vec3 fresnel = mix(min(vec3(f0) * specular, vec3(1.0)), vec3(1.0), pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0)) * weight;
             vec3 ray = refract(incident, normal, 1.0 / ior);
             float thickness = u_material_thickness_factor * texture(u_tex_thickness, v__thickness_uv).g;
             float travel = thickness / max(length(mat3(transpose(u_model_OP_inverse_transpose)) * ray), 0.000001);
@@ -1038,7 +1045,7 @@ init python:
                 vec3 L = reflect(-V, H);
                 float nl = max(L.z, 0.0), vh = max(dot(V, H), 0.0);
                 float weight = 4.0 * l__visibility(nv, nl, a) * nl * vh / max(H.z, 0.00001);
-                float fresnel = pow(1.0 - vh, 5.0);
+                float fresnel = pow(clamp(1.0 - vh, 0.0, 1.0), 5.0);
                 sum.rg += vec2(1.0 - fresnel, fresnel) * weight;
                 vec3 cloth_light = vec3(cos(6.28318530718 * xi.x) * sqrt(xi.y),
                     sin(6.28318530718 * xi.x) * sqrt(xi.y), sqrt(1.0 - xi.y));

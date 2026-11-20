@@ -300,6 +300,9 @@ cdef class Mat4ArraySetter(ArraySetter):
             raise ValueError(f"Expected {self.length} matrices, got {len(value)}.")
         for i in range(self.length):
             matrix = value[i]
+            # Typed assignment admits None, whose fields would be read through a null pointer.
+            if matrix is None:
+                raise TypeError(f"Expected {self.length} matrices, got None at index {i}.")
             for j in range(16):
                 values[i * 16 + j] = matrix.m[j]
         glUniformMatrix4fv(self.location, self.length, GL_FALSE, values)
@@ -526,6 +529,8 @@ cdef class GLTFDepthGetter(Getter):
         value = context.uniforms[self.uniform_name]
         if type(value) is Render:
             value = value.cached_texture
+        if not isinstance(value, GLTexture):
+            raise TypeError(f"Uniform {self.uniform_name} needs a rendered texture, got {value!r}.")
         cdef GLTexture texture = value
         return texture.depth_texture if texture.depth_texture is not None else texture
 

@@ -333,7 +333,8 @@ class Cache:
         while True:
             ce = self.cache.get(image)
 
-            if ce is not None and (ce.surf is not None or ((texture or render) and ce.texture is not None)):
+            # A surface alone may belong to a decode another thread is still uploading and clearing.
+            if ce is not None and (texture or render) and ce.texture is not None:
                 return self._get(image, predict, texture, render)
 
             with self.lock:

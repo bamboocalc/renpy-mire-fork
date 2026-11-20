@@ -309,6 +309,31 @@ def test_concurrent_requests_share_one_decode(mocker, cache, draw):
     assert cache.loading == {}
 
 
+def test_request_during_an_upload_waits_for_its_texture(cache, draw):
+    """A decoded surface whose texture another thread is still creating is not a cache hit."""
+
+    image = im.Null()
+    started, release = threading.Event(), threading.Event()
+
+    def load_texture(surface, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return surface
+
+    draw.load_texture.side_effect = load_texture
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(cache.get, image, texture=True)
+        assert started.wait(5)
+        second = pool.submit(cache.get, image, texture=True)
+        time.sleep(0.1)
+        release.set()
+        assert first.result(5) is second.result(5)
+
+    assert draw.load_texture.call_count == 1
+    assert cache.loading == {}
+
+
 def test_failed_decode_releases_waiters(mocker, cache, draw):
     """When the decoding thread fails, a waiting thread decodes the image itself and reports its own error."""
 
