@@ -56,8 +56,12 @@ class FetchError(Exception):
 
         self.original_exception = exception
 
-        m = re.search(r"\d\d\d", message)
-        if m is not None:
+        response = getattr(exception, "response", None)
+
+        # Other exceptions' messages hold numbers like ports and addresses, so only a web fetch message is searched.
+        if response is not None:
+            self.status_code = response.status_code
+        elif exception is None and (m := re.search(r"\d\d\d", message)):
             self.status_code = int(m.group(0))
         else:
             self.status_code = None
@@ -268,7 +272,7 @@ def fetch_emscripten(url, method, data, content_type, timeout, headers):
         if data is not None:
             f.write(data)
 
-    url = url.replace('"', '\\"')
+    url = url.replace("\\", "\\\\").replace('"', '\\"')
 
     import json
 
@@ -397,7 +401,7 @@ def fetch(
         raise FetchError("result must be one of 'bytes', 'text', or 'json'.")
 
     if params is not None:
-        url += "?" + _urlencode(params)
+        url += ("&" if "?" in url else "?") + _urlencode(params)
 
     if method is None:
         if data is not None or json is not None:

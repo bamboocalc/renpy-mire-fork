@@ -204,7 +204,9 @@ def enqueue(relpath, rtype, data):
 def process_downloaded_resources():
     global queue
 
+    # Expired files are freed even when nothing is downloading.
     if not queue:
+        unlink_expired()
         return
 
     with queue_lock:
@@ -257,6 +259,10 @@ def process_downloaded_resources():
         finally:
             queue = postponed + todo
 
+    unlink_expired()
+
+
+def unlink_expired():
     # Free files from memory once they are loaded
     # Due to search-path dups and derived images (including image-based animations)
     # files can't be removed right after actual load
@@ -266,7 +272,12 @@ def process_downloaded_resources():
         # Get the number of seconds that passed since the item was pushed into the to_unlink
         delta = current_time - value
         if delta > ttl:
-            os.unlink(fullpath)
+            # A file that is already gone would otherwise raise here on every call.
+            try:
+                os.unlink(fullpath)
+            except OSError:
+                pass
+
             del to_unlink[fullpath]
 
 

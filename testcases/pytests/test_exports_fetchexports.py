@@ -159,3 +159,27 @@ def test_seek_resets_progress():
     assert progress.tell() == 0
     assert progress.get_progress() == 0
     assert b"".join(progress) == b"hello world"
+
+
+def test_status_code_comes_from_the_response():
+    """The first three digits in the message were taken as the status, so a connection to 127.0.0.1 gave 127."""
+
+    class Response:
+        status_code = 503
+
+    error = fetchexports.FetchError("HTTPConnectionPool(host='127.0.0.1', port=8080): refused", ConnectionError())
+    assert error.status_code is None
+
+    http_error = ConnectionError("Server Error")
+    http_error.response = Response()
+    assert fetchexports.FetchError(str(http_error), http_error).status_code == 503
+
+
+def test_params_extend_an_existing_query(mocker):
+    """A second ? was appended to a URL that already had a query."""
+
+    fetch_requests = mocker.patch.object(fetchexports, "fetch_requests", return_value=b"")
+
+    fetchexports.fetch("https://example.invalid/api?a=1", params={"b": "2"})
+
+    assert fetch_requests.call_args[0][0] == "https://example.invalid/api?a=1&b=2"
