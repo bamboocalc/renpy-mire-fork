@@ -35,6 +35,10 @@ class RenpyTestAssertionError(AssertionError):
     pass
 
 
+class RenpyTestXPassedError(RenpyTestAssertionError):
+    """An assertion expected to fail passed, which fails the run even inside an xfail testcase."""
+
+
 class RenpyTestScreenshotError(RenpyTestException):
     pass
 

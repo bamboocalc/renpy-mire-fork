@@ -25,6 +25,7 @@ import pytest
 
 import renpy
 from renpy.test import testexecution, testfilter, testreporter
+from renpy.test.types import RenpyTestXPassedError
 
 ################################################################################
 # Phases
@@ -334,3 +335,44 @@ def test_get_test_window_size(mocker, initialized, mobile, expected):
     mocker.patch.object(renpy.config, "screen_width", 800)
     mocker.patch.object(renpy.config, "screen_height", 600)
     assert testexecution.get_test_window_size() == expected
+
+
+class QuittingNode:
+    """A node that quits the game, as a Quit action run by a test does."""
+
+    next = None
+
+    def ready(self):
+        return True
+
+    def start(self):
+        return None
+
+    def execute(self, state, t):
+        raise renpy.game.QuitException()
+
+
+def test_quit_from_a_node_other_than_exit_is_raised(mocker):
+    """Only a quit from an exit node was re-raised; any other quit was swallowed and the test went on."""
+
+    mocker.patch.object(renpy.display.core, "get_time", return_value=0.0)
+    executor = testexecution.NodeExecutor(QuittingNode())
+
+    with pytest.raises(renpy.game.QuitException):
+        executor.execute()
+
+
+def test_unexpected_pass_fails_an_xfail_testcase(mocker):
+    """An xfail testcase reported an assertion that passed unexpectedly as an expected failure."""
+
+    controller = testexecution.TestPhaseController.__new__(testexecution.TestPhaseController)
+    controller.active_phase = mocker.Mock()
+    controller.active_phase.block.xfail = True
+    controller.active_phase.error.return_value = None
+    mocker.patch.object(controller, "get_frame_stack", return_value=[])
+    mocker.patch.object(testexecution, "node_executor", mocker.Mock(node=None), create=True)
+    mocker.patch.object(testreporter, "reporter", mocker.Mock())
+
+    controller.handle_exception(RenpyTestXPassedError("xpassed"))
+
+    controller.active_phase.error.assert_called_once_with(testreporter.OutcomeStatus.FAILED)

@@ -31,7 +31,7 @@ import renpy
 from renpy.error import ANSIColors
 from renpy.test.testast import Assert, BaseTestBlock, TestCase, TestHook, TestSuite
 from renpy.test.testsettings import _test
-from renpy.test.types import RenpyTestAssertionError
+from renpy.test.types import RenpyTestAssertionError, RenpyTestXPassedError
 
 
 def format_seconds(seconds: float) -> str:
@@ -411,6 +411,10 @@ def get_assertion_error_string(epc: renpy.error.ExceptionPrintContext, assert_no
         os.environ["FORCE_COLOR"] = "1"
 
     with contextlib.redirect_stdout(io.StringIO()) as string_stream:
+        # The context holds the stdout it was made with, so redirecting stdout doesn't reach it.
+        if isinstance(epc, renpy.error.TextIOExceptionPrintContext):
+            epc.file = string_stream
+
         expr = str(assert_node.condition)
 
         filename = renpy.exports.unelide_filename(assert_node.filename)
@@ -883,7 +887,10 @@ class ReporterManager:
         for reporter in self.reporters:
             reporter.log_assert(assert_node, status, test_block.current_full_parameterized_path)
 
-        if status in (OutcomeStatus.FAILED, OutcomeStatus.XPASSED):
+        if status == OutcomeStatus.XPASSED:
+            raise RenpyTestXPassedError(f"{status.value}: {assert_node}")
+
+        if status == OutcomeStatus.FAILED:
             raise RenpyTestAssertionError(f"{status.value}: {assert_node}")
 
     def _determine_assert_status(self, assert_node: Assert, outcome: BaseOutcome) -> OutcomeStatus:

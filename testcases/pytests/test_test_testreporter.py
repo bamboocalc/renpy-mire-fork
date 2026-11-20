@@ -22,12 +22,13 @@
 
 """Tests for how the test reporter turns the asserts of a testcase into its status, in renpy/test/testreporter.py."""
 
+import io
 from types import SimpleNamespace
 
 import pytest
 
 import renpy
-from renpy.test.testreporter import OutcomeStatus, ReporterManager
+from renpy.test.testreporter import OutcomeStatus, ReporterManager, get_assertion_error_string
 from renpy.test.types import RenpyTestAssertionError
 
 SCRIPT = """\
@@ -122,3 +123,17 @@ def test_testcase_status_from_asserts(name: str, asserts: list[SimpleNamespace],
     """
 
     assert run_testcase(name, *asserts).status == status
+
+
+def test_assertion_error_string_holds_the_message(tmp_path):
+    """The print context kept writing to the stdout it was made with, so the returned string was empty."""
+
+    script = tmp_path / "asserts.rpy"
+    script.write_text("testcase probe:\n    assert eval False\n", encoding="utf-8")
+    epc = renpy.error.NonColoredExceptionPrintContext(io.StringIO())
+    node = SimpleNamespace(condition="eval False", filename=str(script), linenumber=2)
+
+    message = get_assertion_error_string(epc, node, "probe")
+
+    assert "AssertionError" in message
+    assert "assert eval False" in message

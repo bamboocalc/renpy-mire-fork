@@ -30,7 +30,7 @@ from renpy.test import testreporter
 from renpy.test.testast import BaseTestBlock, ControlFrame, Exit, Node, TestCase, TestHook, TestSuite
 from renpy.test.testfilter import ExecutionFilter
 from renpy.test.testsettings import _test, global_testsuite_name
-from renpy.test.types import HookType, NodeLocation, NodeState, RenpyTestTimeoutError
+from renpy.test.types import HookType, NodeLocation, NodeState, RenpyTestTimeoutError, RenpyTestXPassedError
 
 initialized: bool = False
 
@@ -193,6 +193,10 @@ def push_control_frame(control_frame: ControlFrame) -> None:
     control_frame_stack.append(control_frame)
 
 
+def is_current_control_frame(control_frame: ControlFrame) -> bool:
+    return bool(control_frame_stack) and control_frame_stack[-1] is control_frame
+
+
 def quit_handler() -> int:
     """
     Handles the quit command and QuitException thrown by the test.
@@ -247,16 +251,16 @@ def scoped_exec(source: str, hide: bool = False, store: str = "store") -> None:
     """
 
     scope = renpy.test.testexecution.get_current_scope()
-    old_scope = dict(scope)
     old_keys = set(scope.keys())
     globals = renpy.python.store_dicts[store]
 
     # code = renpy.ast.PyCode(source, mode="hide" if hide else "exec")
-    renpy.python.py_exec_bytecode(dedent(source), hide, globals=globals, locals=scope)
-
     if hide:
-        scope_stack[-1] = old_scope
+        # Hidden code still sees the test parameters and loop variables, but keeps its own names.
+        renpy.python.py_exec_bytecode(dedent(source), globals=globals, locals=dict(scope))
         return
+
+    renpy.python.py_exec_bytecode(dedent(source), globals=globals, locals=scope)
 
     new_keys = set(scope.keys()) - old_keys
     for key in new_keys:
@@ -496,12 +500,13 @@ class NodeExecutor:
         try:
             self.node_state = self.node.execute(self.node_state, elapsed)
         except renpy.game.QuitException:
-            if isinstance(node_executor.node, Exit):
+            if isinstance(self.node, Exit):
                 # Handle Exit nodes gracefully, and run any callbacks.
                 self.node_state = None
                 self.next_node = None
                 self.move_to_next_node_if_possible()
-                raise
+
+            raise
         except renpy.game.CONTROL_EXCEPTIONS:
             self.node_state = None
             self.next_node = self.node.next
@@ -617,7 +622,10 @@ class TestPhaseController:
         new_state.enter()
 
     def handle_exception(self, exc: Exception) -> None:
-        if self.active_phase.block is None or not self.active_phase.block.xfail:
+        block = self.active_phase.block
+
+        # An unexpected pass fails the run even inside an xfail testcase.
+        if block is None or not block.xfail or isinstance(exc, RenpyTestXPassedError):
             xfailed = False
             status = testreporter.OutcomeStatus.FAILED
         else:

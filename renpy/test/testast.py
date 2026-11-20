@@ -1162,8 +1162,10 @@ class RepeatCounter(Condition):
         return super().restart()
 
     def ready(self):
+        return self.value <= 0
+
+    def count_iteration(self) -> None:
         self.value -= 1
-        return self.value < 0
 
 
 class Pass(Node):
@@ -1226,6 +1228,11 @@ class Skip(Node):
         return True
 
     def execute(self, state, t):
+        # start() returns None when skipping isn't allowed here.
+        if state is None:
+            next_node(self.next)
+            return
+
         was_skipping = renpy.config.skipping is not None
 
         if renpy.exports.context()._menu:  # type: ignore
@@ -1421,6 +1428,10 @@ class Until(Node):
         if has_started:
             child_state = self.left.execute(child_state, t - start_time)
 
+            # Until checks right every frame, so a repeat counts finished iterations instead.
+            if child_state is None and isinstance(self.right, RepeatCounter):
+                self.right.count_iteration()
+
         next_node(self)
         if child_state is None:
             start_time = 0
@@ -1549,13 +1560,12 @@ class For(ControlFrame):
         self.block.chain(self)
 
     def start(self) -> NodeState:
-        """Initialize and push a control frame for this loop."""
+        """Initialize and push a control frame for this loop, unless the body is returning to it."""
 
-        if self.loop_iterator is None:
-            iterable = scoped_eval(self.expression)
-            self.loop_iterator = iter(iterable)
+        if not renpy.test.testexecution.is_current_control_frame(self):
+            self.loop_iterator = iter(scoped_eval(self.expression))
+            renpy.test.testexecution.push_control_frame(self)
 
-        renpy.test.testexecution.push_control_frame(self)
         return self.loop_iterator
 
     def execute(self, state: NodeState, t: float) -> NodeState:
@@ -1613,7 +1623,10 @@ class While(ControlFrame):
         self.block = block
 
     def start(self) -> NodeState:
-        renpy.test.testexecution.push_control_frame(self)
+        # The body returns here after each pass, which mustn't push the frame again.
+        if not renpy.test.testexecution.is_current_control_frame(self):
+            renpy.test.testexecution.push_control_frame(self)
+
         return 0
 
     def chain(self, next):
@@ -1626,6 +1639,7 @@ class While(ControlFrame):
             next_node(self.block.block[0])
             return
 
+        renpy.test.testexecution.pop_control_frame(self)
         next_node(self.next)
         return
 
