@@ -180,7 +180,7 @@ init 1 python in editor:
         e = FancyEditorInfo(
             0,
             _("Visual Studio Code"),
-            AD2 if installed else AD2,
+            AD2 if installed else AD1,
             "extension:vscode",
             _("Up to 110 MB download required."),
             None)

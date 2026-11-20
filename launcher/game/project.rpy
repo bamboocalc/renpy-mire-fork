@@ -656,7 +656,7 @@ init python in project:
             for name in [*persistent.collapsed_folders.keys()]:
                 dpath = os.path.join(prefix, name)
 
-                if not os.path.isdir(dpath) and not "Tutorials":
+                if not os.path.isdir(dpath) and name != "Tutorials":
                     persistent.collapsed_folders.pop(name)
 
 

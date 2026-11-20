@@ -107,7 +107,7 @@ label itch:
             fn = os.path.join(destination, fn)
             files.append((fn, channel))
 
-        if not os.path.exists(destination):
+        if not files:
             interface.error(
                 _("No uploadable files were found. Please choose 'Build' and try again."),
                 label="build_distributions"

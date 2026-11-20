@@ -158,7 +158,7 @@ def _check_hash(filename, hashj):
 
                 sha.update(data)
 
-        return sha.hexdigest() == hash
+        return sha.hexdigest() == hashj
 
     except Exception:
         return False
@@ -169,6 +169,7 @@ def _check_hash(filename, hashj):
 # downloaded.
 download_file = ""
 download_url = ""
+download_error = ""
 
 
 def download(url, filename, hash=None, headers=None, requests_kwargs={}):
@@ -176,8 +177,8 @@ def download(url, filename, hash=None, headers=None, requests_kwargs={}):
     Downloads `url` to `filename`, a tempfile.
     """
     global download_url
-
     global download_file
+    global download_error
 
     download_url = url
     download_file = _friendly(filename)
@@ -219,8 +220,10 @@ def download(url, filename, hash=None, headers=None, requests_kwargs={}):
                         )
 
     except requests.HTTPError as e:
-        if not quiet:
+        if quiet:
             raise
+
+        download_error = str(e)
 
         interface.error(
             _(
@@ -229,9 +232,10 @@ def download(url, filename, hash=None, headers=None, requests_kwargs={}):
         )
 
     if hash is not None:
-        if not quiet:
-            raise Exception("Hash check failed.")
         if not _check_hash(filename, hash):
+            if quiet:
+                raise Exception("Hash check failed.")
+
             interface.error(
                 _("The downloaded file [installer.download_file] from [installer.download_url] is not correct.")
             )
@@ -356,6 +360,9 @@ def remove(filename):
         return
 
     backup = _path("backup:" + filename)
+
+    # _clean removes empty directories, including this one.
+    os.makedirs(os.path.dirname(backup), exist_ok=True)
     shutil.move(_path(filename), backup)
 
     # Now, touch everything so _cleanup doesn't get it too quickly.
@@ -470,7 +477,13 @@ def manifest(url, renpy=False, insecure=False):
 
         key = ecdsa.VerifyingKey.from_pem(_renpy.exports.open_file("renpy_ecdsa_public.pem").read())
 
-        if not key.verify(sig, manifest):
+        # verify raises on a bad signature rather than returning False.
+        try:
+            verified = key.verify(sig, manifest)
+        except ecdsa.BadSignatureError:
+            verified = False
+
+        if not verified:
             error(_("The manifest signature is not valid."))
             return
 
@@ -483,7 +496,7 @@ def manifest(url, renpy=False, insecure=False):
 
         set_target(project.current.path)
 
-    exec(manifest.decode("utf-8"), {}, {})
+    exec(manifest.decode("utf-8"), {})
 
 
 def local_manifest(filename, renpy=False):
@@ -505,4 +518,4 @@ def local_manifest(filename, renpy=False):
         set_target(project.current.path)
 
     with open(filename, "r") as f:
-        exec(f.read(), {}, {})
+        exec(f.read(), {})

@@ -125,7 +125,7 @@ init -1 python:
                 empty = ''
 
             while True:
-                rv = interface.input(_("QUESTION"), prompt, default=empty, cancel=Jump("android"))
+                rv = interface.input(_("QUESTION"), prompt, default=empty, cancel=Jump(self.platform))
 
                 rv = rv.strip()
 
@@ -133,7 +133,7 @@ init -1 python:
                     return rv
 
         def choice(self, prompt, choices, default):
-            return interface.choice(prompt, choices, default, cancel=Jump("android"))
+            return interface.choice(prompt, choices, default, cancel=Jump(self.platform))
 
         def fail(self, prompt, edit=True):
             self.log(prompt)
@@ -143,7 +143,7 @@ init -1 python:
             if edit and self.edit:
                 self.open_editor()
 
-            interface.error(prompt, label="android")
+            interface.error(prompt, label=self.platform)
 
         def open_editor(self):
             editor.EditAbsolute(self.filename)()
@@ -154,7 +154,7 @@ init -1 python:
 
         def final_success(self, prompt):
             self.log(prompt)
-            interface.info(prompt, label="android")
+            interface.info(prompt, label=self.platform)
 
         def run_yes_thread(self):
             import time

@@ -128,7 +128,7 @@ init python:
             p = project.current
         p.update_dump(force=True, gui=gui)
 
-        name = p.dump.get("name", None) or project.name
+        name = p.dump.get("name", None) or p.name
         version = p.dump.get("version", None) or "0.0"
 
         dest = xcode_project(p, target)

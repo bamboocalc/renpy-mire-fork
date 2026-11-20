@@ -27,8 +27,9 @@ init python hide:
         with open(fn) as f:
             data = f.read()
 
-        for m in re.finditer(r'__?\(".*?"\)', data):
-            out.write("    " + m.group(0) + "\n")
+        # The formatter splits long calls across lines.
+        for m in re.finditer(r'(__?)\(\s*(".*?")\s*\)', data):
+            out.write("    " + m.group(1) + "(" + m.group(2) + ")\n")
 
 
 if __name__ == "__main__":
