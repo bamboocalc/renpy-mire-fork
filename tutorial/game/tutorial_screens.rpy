@@ -109,15 +109,15 @@ screen day_planner():
 
                 hbox:
                     text _("Intelligence")
-                    bar value StaticValue(stat_strength, 100)
+                    bar value StaticValue(stat_intelligence, 100)
 
                 hbox:
                     text _("Moxie")
-                    bar value StaticValue(stat_strength, 100)
+                    bar value StaticValue(stat_moxie, 100)
 
                 hbox:
                     text _("Chutzpah")
-                    bar value StaticValue(stat_strength, 100)
+                    bar value StaticValue(stat_chutzpah, 100)
 
 
         # A grid of three frames, one for each of the periods in the day.

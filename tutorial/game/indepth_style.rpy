@@ -488,7 +488,7 @@ label style_text:
 
 
     example:
-        style adjust_true_text:
+        style adjust_false_text:
             adjust_spacing False
 
     show screen text("adjust_false_text")
