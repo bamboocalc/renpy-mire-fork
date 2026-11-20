@@ -96,10 +96,16 @@ label texture_upload_prediction_fixture:
 
 testsuite texture_upload:
 
+    # Uploads finish in one step at the default chunk size of 0, which would leave nothing partial to test.
+    before testcase:
+        $ _upload_chunk_size, config.texture_upload_chunk_size = config.texture_upload_chunk_size, 256 * 1024
+
+    after testcase:
+        $ config.texture_upload_chunk_size = _upload_chunk_size
+
     testcase demand_finishes_a_partial_upload:
         $ _upload_texture, _upload_loaded = texture_upload__begin()
-        if eval config.texture_upload_chunk_size:
-            assert eval not _upload_loaded
+        assert eval not _upload_loaded
         $ _upload_texture.load()
         assert eval _upload_texture.loaded
         $ _upload_samples = texture_upload__samples(_upload_texture)
@@ -111,8 +117,7 @@ testsuite texture_upload:
 
     testcase cooperative_steps_complete:
         $ _upload_texture, _upload_loaded = texture_upload__begin()
-        if eval config.texture_upload_chunk_size:
-            assert eval not _upload_loaded
+        assert eval not _upload_loaded
         pause 0.01 until eval _upload_texture.loaded timeout 5.0
         $ _upload_reference = texture_upload__make()
         $ _upload_reference.load()

@@ -1113,6 +1113,7 @@ testsuite assimp_caustics:
         pause until "The focused light is ready."
         assert eval assimp_alpha_saved_model.caustics and assimp_alpha_saved_model.colored_shadows
         assert eval assimp_shadow__sample(assimp_alpha_saved_model, 0)["hash"] == renpy.session["_caustic_hash"]
+        run Function(renpy.unlink_save, "assimp-caustic-test")
 
 testsuite assimp_colored_shadows:
 

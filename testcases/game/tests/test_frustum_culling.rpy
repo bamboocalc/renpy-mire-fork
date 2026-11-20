@@ -35,8 +35,11 @@ init python:
 testsuite frustum_culling:
 
     testcase camera_output_is_unchanged:
+        # Culled draws are only counted with debug_image_cache; without the count, equal pixels prove nothing was culled.
+        $ _cull_debug, config.debug_image_cache = config.debug_image_cache, True
         $ _cull_reference = frustum_culling__pixels(False)
         $ _cull_before = renpy.gl2.gl2draw.model_stats["culled"]
-        assert eval frustum_culling__pixels(True) == _cull_reference
-        if eval config.debug_image_cache:
-            assert eval renpy.gl2.gl2draw.model_stats["culled"] > _cull_before
+        $ _cull_pixels = frustum_culling__pixels(True)
+        $ config.debug_image_cache = _cull_debug
+        assert eval _cull_pixels == _cull_reference
+        assert eval renpy.gl2.gl2draw.model_stats["culled"] > _cull_before
