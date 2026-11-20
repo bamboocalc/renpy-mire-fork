@@ -25,6 +25,7 @@ Tests for renpy.translation: generation of translation identifiers from translat
 translation of strings.
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -277,3 +278,111 @@ def test_detect_user_locale_splits_language_and_region(mocker, name, expected):
     mocker.patch("locale.getdefaultlocale", return_value=(name, None))
 
     assert translation.detect_user_locale() == expected
+
+
+################################################################################
+# Translation tools
+################################################################################
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('_("a\\\nb")', "ab"),
+        ('_("a" \\\n "b")', "ab"),
+        ('_("""a\\\\\nb""")', "a\\\nb"),
+    ],
+    ids=["continued-string", "continued-call", "escaped-backslash"],
+)
+def test_scan_strings_reads_continued_lines_like_python(mocker, source, expected):
+    """Removing every backslash-newline split an escaped backslash from its pair before a newline."""
+
+    mocker.patch.object(
+        renpy.game, "script", SimpleNamespace(translator=SimpleNamespace(additional_strings={"game/a.rpy": []}))
+    )
+    mocker.patch.object(renpy.lexer, "list_logical_lines", return_value=[("game/a.rpy", 1, source)])
+    mocker.patch.object(renpy.config, "commondir", "renpy/common")
+    mocker.patch.object(renpy.config, "gamedir", "game")
+
+    assert [s.text for s in translation.scanstrings.scan_strings("game/a.rpy")] == [expected]
+
+
+def test_extract_strings_merges_into_an_existing_file(mocker, tmp_path):
+    """json.load lost its encoding argument in Python 3.9, so merging raised TypeError."""
+
+    strings = SimpleNamespace(translations={"Start": "Commencer", "Same": "Same"})
+    mocker.patch.object(renpy.game, "script", SimpleNamespace(translator=SimpleNamespace(strings={"french": strings})))
+    destination = tmp_path / "strings.json"
+    destination.write_text('{"Quit": "Quitter"}', encoding="utf-8")
+
+    translation.extract.extract_strings_core("french", str(destination), merge=True)
+
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"Quit": "Quitter", "Start": "Commencer"}
+
+
+def test_dialogue_from_a_ren_py_file_is_translated_into_an_rpy_file(mocker):
+    """Dialogue translations were written to a _ren.py file, which Ren'Py reads as python."""
+
+    mocker.patch.object(renpy.config, "commondir", "renpy/common")
+    mocker.patch.object(renpy.config, "gamedir", "game")
+    say = SimpleNamespace(get_code=lambda filter=None: 'e "Hello."')
+    translate = SimpleNamespace(
+        identifier="start_1", alternate=None, filename="game/script_ren.py", linenumber=3, block=[say]
+    )
+    translator = SimpleNamespace(file_translates={"game/script_ren.py": [("start", translate)]}, language_translates={})
+    mocker.patch.object(renpy.game, "script", SimpleNamespace(translator=translator))
+    open_tl_file = mocker.patch.object(translation.generation, "open_tl_file")
+
+    translation.generation.write_translates("game/script_ren.py", "french", None)
+
+    assert open_tl_file.call_args.args[0].replace("\\", "/") == "game/tl/french/script.rpy"
+
+
+def test_merge_strings_replaces_multiline_strings_without_moving_later_edits(mocker, tmp_path):
+    """Replacing a multiline new string shifted the lines after it, so later edits hit the wrong line."""
+
+    tl = tmp_path / "strings.rpy"
+    tl.write_text(
+        'translate french strings:\n\n    old "A"\n    new """A\nline"""\n\n    old "B"\n    new "B"\n',
+        encoding="utf-8",
+    )
+    filename = tl.as_posix()
+    source = tmp_path / "strings.json"
+    source.write_text(json.dumps({"A": "Alpha", "B": "Beta"}), encoding="utf-8")
+
+    args = SimpleNamespace(language="french", source=str(source), reverse=False, replace=True)
+    mocker.patch.object(renpy.arguments, "ArgumentParser").return_value.parse_args.return_value = args
+    strings = SimpleNamespace(
+        translations={"A": "A\nline", "B": "B"}, translation_loc={"A": (filename, 4), "B": (filename, 8)}
+    )
+    mocker.patch.object(renpy.game, "script", SimpleNamespace(translator=SimpleNamespace(strings={"french": strings})))
+    mocker.patch.object(renpy.config, "clear_lines", True)
+    mocker.patch.object(renpy.scriptedit, "files", set())
+    mocker.patch.object(renpy.scriptedit, "lines", {})
+    mocker.patch.object(renpy.loader, "add_auto")
+
+    translation.merge.merge_strings()
+
+    assert tl.read_text(encoding="utf-8").splitlines()[3:] == ['    new "Alpha"', "", '    old "B"', '    new "Beta"']
+
+
+def test_plain_text_dialogue_export_filters_and_orders_menu_captions(mocker, tmp_path):
+    """Menu captions were always written tab-delimited and unfiltered, after all of the file's dialogue."""
+
+    mocker.patch.object(renpy.config, "commondir", "renpy/common")
+    say = ast.Say(("game/script.rpy", 5), "e", "Hello.", None)
+    translator = SimpleNamespace(
+        file_translates={
+            "game/script.rpy": [("start", SimpleNamespace(identifier="start_1", linenumber=5, block=[say]))]
+        },
+        strings={None: SimpleNamespace(translate=lambda s: s)},
+    )
+    mocker.patch.object(renpy.game, "script", SimpleNamespace(translator=translator))
+    menu = SimpleNamespace(items=[("{b}Choose{/b}", "True", None)], filename="game/script.rpy", linenumber=2)
+    output = tmp_path / "dialogue.txt"
+
+    translation.dialogue.DialogueFile(
+        "game/script.rpy", str(output), tdf=False, notags=True, escape=False, menu_statements=[menu]
+    )
+
+    assert output.read_text(encoding="utf-8").splitlines() == ["Choose", "Hello."]

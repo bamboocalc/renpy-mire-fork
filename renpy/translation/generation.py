@@ -168,6 +168,10 @@ def write_translates(filename, language, filter):
 
     tl_filename = os.path.join(renpy.config.gamedir, renpy.config.tl_directory, language, fn)  # type: ignore
 
+    # Translations are Ren'Py script, so they go next to the strings that translation_filename puts in .rpy.
+    if tl_filename.endswith("_ren.py"):
+        tl_filename = tl_filename[:-7] + ".rpy"
+
     if tl_filename[-1] == "m":
         tl_filename = tl_filename[:-1]
 

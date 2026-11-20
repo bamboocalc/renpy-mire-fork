@@ -217,6 +217,21 @@ class DialogueFile(object):
         with self.f:
             self.write_dialogue()
 
+    def filter_what(self, what):
+        if self.notags:
+            what = notags_filter(what)
+
+        what = combine_filter(what)
+
+        if self.escape:
+            what = quote_unicode(what)
+        elif self.tdf:
+            what = what.replace("\\", "\\\\")
+            what = what.replace("\t", "\\t")
+            what = what.replace("\n", "\\n")
+
+        return what
+
     def write_dialogue(self):
         """
         Writes the dialogue to the file.
@@ -260,17 +275,7 @@ class DialogueFile(object):
 
                     what = n.what
 
-                    if self.notags:
-                        what = notags_filter(what)
-
-                    what = combine_filter(what)
-
-                    if self.escape:
-                        what = quote_unicode(what)
-                    elif self.tdf:
-                        what = what.replace("\\", "\\\\")
-                        what = what.replace("\t", "\\t")
-                        what = what.replace("\n", "\\n")
+                    what = self.filter_what(what)
 
                     if self.tdf:
                         line = [t.identifier, who, what, n.filename, str(n.linenumber), n.get_code(what_filter)]
@@ -285,16 +290,21 @@ class DialogueFile(object):
                 if block is not None:
                     continue
 
-                line = ["<menu caption>", "", label, m.filename, str(m.linenumber), what_filter(label)]
+                what = renpy.translation.translate_string(label, self.language)  # type: ignore
+                what = self.filter_what(what)
+
+                if self.tdf:
+                    line = ["<menu caption>", "", what, m.filename, str(m.linenumber), what_filter(label)]
+                else:
+                    line = [what]
+
                 lines.append((m.linenumber, line))
 
         if self.strings:
             lines.extend(self.get_strings())
 
-            # If we're tab-delimited, we have line number info, which means we
-            # can sort the list so everything's in order, for menus and stuff.
-            if self.tdf:
-                lines.sort(key=lambda x: x[0])
+        # Every line carries its line number, so menus and strings can be put in order.
+        lines.sort(key=lambda x: x[0])
 
         for _source_line, line in lines:
             self.f.write("\t".join(line) + "\n")
@@ -323,18 +333,7 @@ class DialogueFile(object):
 
             s = renpy.translation.translate_string(s, self.language)  # type: ignore
 
-            if self.notags:
-                s = notags_filter(s)
-
-            s = combine_filter(s)
-
-            if self.escape:
-                s = quote_unicode(s)
-
-            elif self.tdf:
-                s = s.replace("\\", "\\\\")
-                s = s.replace("\t", "\\t")
-                s = s.replace("\n", "\\n")
+            s = self.filter_what(s)
 
             if self.tdf:
                 lines.append((line, ["", "", s, filename, str(line)]))
@@ -392,16 +391,8 @@ def dialogue_command():
         if isinstance(n, renpy.ast.Menu):
             menu_statements[n.filename].append(n)
 
-    for dirname, filename in renpy.loader.listdirfiles():
-        if dirname is None:
-            continue
-
-        filename = os.path.join(dirname, filename)
-
-        if not (filename.endswith(".rpy") or filename.endswith(".rpym")):
-            continue
-
-        filename = os.path.normpath(filename)
+    # The same files the translate command scans: no tl/ directory, and _ren.py files included.
+    for filename in renpy.translation.generation.translate_list_files():
         language = args.language
         if language in ("None", ""):
             language = None

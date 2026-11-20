@@ -36,8 +36,8 @@ def extract_strings_core(language, destination, merge=False, force=False):
     result = {}
 
     if merge:
-        with open(destination, "r") as f:
-            result.update(json.load(f, encoding="utf-8"))
+        with open(destination, "r", encoding="utf-8") as f:
+            result.update(json.load(f))
 
     for k, v in st.translations.items():
         if v and v != k:

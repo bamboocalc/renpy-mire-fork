@@ -63,6 +63,8 @@ def merge_strings():
 
     renpy.config.clear_lines = False
 
+    edits = []
+
     for k, v in st.translations.items():
         trivial = (not v) or (k == v)
 
@@ -80,6 +82,10 @@ def merge_strings():
         code = 'new "{}"'.format(quoted)
 
         filename, linenumber = st.translation_loc[k]
+        edits.append((filename, linenumber, code))
+
+    # Replacing a multiline string moves the lines after it, so edit each file from the bottom up.
+    for filename, linenumber, code in sorted(edits, reverse=True):
         renpy.scriptedit.insert_line_before(code, filename, linenumber)
         renpy.scriptedit.remove_line(filename, linenumber + 1)
 

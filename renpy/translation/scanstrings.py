@@ -126,8 +126,8 @@ def scan_strings(filename):
     for _filename, lineno, text in renpy.lexer.list_logical_lines(filename):
         for m in re.finditer(STRING_RE, text):
             s = m.group(1)
-            s = s.replace("\\\n", "")
 
+            # eval drops backslash-newline continuations itself, and a replace would split an escaped backslash.
             if s is not None:
                 s = s.strip()
                 s = eval(s)
