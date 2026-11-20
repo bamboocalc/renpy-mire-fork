@@ -181,11 +181,12 @@ def test_sampler_property_keys(uniform_name: str, suffix: str) -> None:
         ("tex0__depth", "tex0_OP_depth"),
         ("tex3__res", "tex3_OP_res"),
         ("u_scene__depth", "u_scene_OP_depth"),
-        ("tex4__depth", "tex4__depth"),
+        ("tex4__depth", "tex4_OP_depth"),
+        ("texture__depth", "texture__depth"),
     ],
 )
 def test_sampler_operation_names(name: str, expected: str) -> None:
-    """The built-in tex0 to tex3 samplers take operation suffixes like u_ samplers; tex4 is not a built-in."""
+    """texN samplers take operation suffixes like u_ samplers; other names starting with tex don't."""
 
     part = ShaderPart("test.sampler_operation_names")
 

@@ -293,6 +293,20 @@ init -1600 python:
 
     config.screenshot_pattern = os.environ.get("RENPY_SCREENSHOT_PATTERN", "screenshot%04d.png")
 
+    def _screenshot_to_clipboard():
+        """
+        Returns True if a screenshot taken with the screenshot key should be
+        copied to the clipboard. Copying is disabled by setting the
+        RENPY_SCREENSHOT_CLIPBOARD environment variable to 0.
+        """
+
+        import os
+
+        if os.environ.get("RENPY_SCREENSHOT_CLIPBOARD", "1") == "0":
+            return False
+
+        return _preferences.self_voicing != "clipboard"
+
     # Called to make a screenshot happen.
     def _screenshot_core():
         import os.path
@@ -332,7 +346,7 @@ init -1600 python:
             return
 
         try:
-            if _preferences.self_voicing != "clipboard":
+            if _screenshot_to_clipboard():
                 renpy.put_clipboard_image_file(fn, absolute_path=True)
         except Exception:
             renpy.display.log.write("Failed to copy screenshot to clipboard.")
@@ -352,7 +366,12 @@ init -1600 python:
 
 
     def _screenshot_callback(fn):
-        renpy.notify((__("Saved screenshot as %s.") % fn) +  __(" Copied screenshot to clipboard."))
+        message = __("Saved screenshot as %s.") % fn
+
+        if _screenshot_to_clipboard():
+            message += __(" Copied screenshot to clipboard.")
+
+        renpy.notify(message)
 
     config.screenshot_callback = _screenshot_callback
 
@@ -550,6 +569,15 @@ label _save_reload_game:
         renpy.utter_restart()
 
 label _load_reload_game:
+
+    python hide:
+
+        # On Android and iOS, the game is saved to _reload-1 when the app enters the background, and that save
+        # is deleted when the app returns to the foreground. If the save exists when the app starts, the app was
+        # terminated while in the background, so load the save to return the player to where they were.
+        if (renpy.android or renpy.ios) and config.save_on_mobile_background:
+            if not renpy.session.get("_reload_slot", None) and renpy.can_load("_reload-1"):
+                renpy.session["_reload_slot"] = "_reload-1"
 
     if not renpy.session.get("_reload_slot", None):
         return

@@ -240,7 +240,8 @@ Ubuntu/Debian package list.
 
 On Windows, use the equivalent PowerShell commands with `.\run.ps1`.
 
-`run.sh` rebuilds stale extensions before every launch; Python-only edits need no build step.
+`run.sh` rebuilds stale extensions by default. Use `--no-build` to launch with the existing extensions, as the
+parallel source testcase runner does after a shared build.
 `run-headless.sh` needs Weston, `xvfb-run`, or `Xvfb`; read the script if it fails.
 
 Lint the affected project (e.g. `launcher`, `tutorial`, or `the_question`), not always `testcases`.
@@ -363,6 +364,17 @@ Tests are named `<suite>.<case>`:
 A filter matching nothing is an error. Options are defined in
 [renpy/test/testcli.py](renpy/test/testcli.py); do not guess flags. Success means the runner's
 report shows passes and the process exited 0 — launching the game is not a pass.
+
+After the last test, the game stays open at whatever screen it reached, so `test` never returns unless the
+game's tests end with the `exit` test statement. `testcases` does this in
+[global.rpy](testcases/game/tests/global.rpy). When running tests in another game, add the following to one of its
+test files, or the run will look like a hang after `Status: PASSED`:
+
+```
+testsuite global:
+    teardown:
+        exit
+```
 
 ### Which checks to run
 

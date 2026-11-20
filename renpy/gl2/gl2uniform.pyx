@@ -735,6 +735,32 @@ cdef class DepthGetter(Getter):
 
         raise Exception(f"Uniform {self.uniform_name} needs a texture rendered with gl_depth_texture True.")
 
+cdef class ToCropGetter(Getter):
+    """
+    Returns the (x offset, y offset, x scale, y scale) that transforms a texture coordinate for the Render a texture
+    uniform was rendered from into one for the texture, as offset + uv * scale. This is (0, 0, 1, 1) unless the
+    texture was cropped with the crop_texture property.
+    """
+
+    cdef Getter getter
+
+    def __init__(self, uniform_name, getter):
+        Getter.__init__(self, uniform_name)
+        self.getter = getter
+
+    cdef object get(self, GL2DrawingContext context, GL2Model model):
+        value = self.getter.get(context, model)
+
+        if type(value) is Render:
+            value = value.cached_texture
+
+        if isinstance(value, GLTexture):
+            return value.to_crop
+        elif isinstance(value, GL2Model):
+            return (0.0, 0.0, 1.0, 1.0)
+        else:
+            raise TypeError("ToCropGetter only works with texture values.")
+
 cdef class VirtualSizeOpGetter(Getter):
     """
     Returns the size of a texture uniform in virtual pixels. Unlike ResGetter, this doesn't depend on the
@@ -869,6 +895,9 @@ def generate_uniform_setter(shader_name: str, location: int, uniform_name: str, 
         uniform_type = "vec2"
     elif operation == "depth":
         getter = DepthGetter(uniform_name, getter)
+    elif operation == "to_crop":
+        getter = ToCropGetter(uniform_name, getter)
+        uniform_type = "vec4"
     else:
         raise TypeError(
             f"Uniform {uniform_name} in shader {shader_name} has unknown operation "

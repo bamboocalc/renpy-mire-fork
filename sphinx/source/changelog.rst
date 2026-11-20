@@ -5,6 +5,49 @@ Changelog (Ren'Py 7.x-)
 *There is also a list of* :doc:`incompatible changes <incompatible>`
 
 
+.. _renpy-8.6.2:
+
+8.6.2
+=====
+
+Fixes
+-----
+
+On Android 16 and later, the back button and back gesture once again roll back, rather than closing the game.
+(This fix was incorrectly listed in the 8.6.1 changelog, but was not in the release itself.)
+
+On macOS, colors are once again displayed as they were in Ren'Py 8.5, fixing a green tinge introduced in 8.6.0.
+
+Scrying (which predicts things like extend and :var:`config.nvl_page_ctc`) now takes translations into account,
+rather than skipping over them.
+
+On Windows, the list of input method (IME) candidates drawn by Ren'Py now highlights the selected candidate
+on every page of candidates, rather than only on the first. Pages of candidates also no longer repeat
+candidates from the previous page.
+
+In the :doc:`testing framework <testcases>`, a text selector matching dialogue now matches the translated dialogue being
+displayed, or with ``raw``, the dialogue as written in the original-language script. Previously, which of the two
+was matched depended on how the line was translated, and some translated lines caused an error.
+
+Live2D clipping mask textures that are being cropped to save space are now cropped in a way that aligns with
+texels, allowing these textures to be sampled consistently even when the crop changes as the model animates. This keeps
+the edges of the masked parts from flickering.
+
+Meshes shown through a perspective camera, such as Live2D models and displayables using :tpref:`mesh`, are rendered
+to textures at the size they are drawn on screen. Previously, the camera's distance was counted as scaling, so these
+textures were rendered as large as :var:`config.mesh_oversample` allows, using more memory and GPU time.
+
+
+Other Changes
+-------------
+
+Setting the new :envvar:`RENPY_SCREENSHOT_CLIPBOARD` environment variable to 0 stops the screenshot key from copying
+screenshots to the clipboard.
+
+Using :func:`Start` or :func:`renpy.jump_out_of_context` in the outermost context, such as during the splashscreen or
+in the game itself, reports an error explaining that there is no parent context to jump to, rather than quitting with
+an uncaught ``JumpOutException``.
+
 .. _renpy-8.6.1:
 
 8.6.1
@@ -32,6 +75,17 @@ active.
 The OpenGL state cache is properly reset when a new context is created, ensuring that GL state matches the cache
 and preventing issues with reused contexts. This manifested in a black screen on mobile devices after a
 shift+R reset or call to :func:`renpy.utter_restart`.
+
+The list of input method (IME) candidates drawn by Ren'Py on Windows no longer shows the number of each
+candidate twice.
+
+On Android, a game is once again told that it is entering the background when that happens, rather than when
+it returns to the foreground. This means the game is saved before Android can terminate it, and that Ren'Py
+no longer blocks for 8 seconds each time the game is sent to the background.
+
+On Android and iOS, a game that is terminated while in the background once again returns the player to where
+they were when it is started again, as described by :var:`config.save_on_mobile_background`.
+
 
 .. _renpy-8.6.0:
 
