@@ -330,7 +330,7 @@ def scan(name, o, prefix="", inclass=False):
             init_doc = getdoc(init)
 
             if init_doc and re.match(r"[\w\.]+\(", init_doc):
-                sig, _, init_doc = doc.partition("\n\n")
+                sig, _, init_doc = init_doc.partition("\n\n")
                 init_doc = textwrap.dedent(init_doc)
 
                 if "(" in sig:
