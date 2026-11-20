@@ -474,6 +474,29 @@ def test_standard_material_defaults_without_authored_materials(standard_model):
     assert all(mi.uniforms["u_color_base"] == (1, 1, 1, 1) for mi in data.mesh_info)
 
 
+@pytest.mark.parametrize("names", ["unique", "missing", "duplicate"])
+@pytest.mark.parametrize("glb", [False, True], ids=["gltf", "glb"])
+def test_standard_materials_survive_assimp_renumbering(standard_model, model_cache, glb, names):
+    """Assimp numbers only referenced materials, by first use; each mesh must still bind its own document material."""
+    expected = [(mi.uniforms, set(mi.texture_uniforms)) for mi in standard_model(glb=glb).load().mesh_info]
+    model_cache.clear()
+
+    def edit(document):
+        count = len(document["materials"])
+        document["materials"] = [{"name": "Unused"}] + document["materials"][::-1]
+        for mesh in document["meshes"]:
+            mesh["primitives"][0]["material"] = count - mesh["primitives"][0]["material"]
+        for material in document["materials"]:
+            if names == "missing":
+                del material["name"]
+            elif names == "duplicate":
+                material["name"] = "Paint"
+
+    data = standard_model(edit, glb=glb).load()
+    assert [(mi.uniforms, set(mi.texture_uniforms)) for mi in data.mesh_info] == expected
+    assert [mi.material_index for mi in data.mesh_info] == list(range(12, 0, -1))
+
+
 def test_layered_material_factors_and_independent_texture_bindings(standard_model):
     """Extension factors retain their ranges and channels, and specular-color maps decode sRGB independently of weights."""
     def edit(document):
@@ -870,6 +893,19 @@ def test_scene_instances_share_import_without_sharing_controls(scene_model):
     assert first.node_overrides == () and first.material_overrides == ()
 
 
+def test_scene_material_overrides_use_document_indices(scene_model):
+    """The Door mesh is reached first, so Assimp numbers WallPaint 0; overrides still resolve to WallPaint's mesh."""
+    def edit(document):
+        document["meshes"][0]["primitives"][0]["material"] = 1
+        document["meshes"][1]["primitives"][0]["material"] = 0
+
+    model = scene_model(edit, material_overrides={"WallPaint": {"u_color_base": (0, 1, 0, 1)}})
+    data = model.load()
+    door = next(blit.mesh_info for blit in data.blit_info if blit.node_index == 1)
+    assert door.material_index == 1
+    assert set(model._materials(data)) == {door.material_index}
+
+
 def test_scene_import_keeps_multiple_roots_and_multi_primitive_nodes(scene_model):
     """Source-node identities survive Assimp's synthetic root and the splitting of a source mesh into primitives."""
     def edit(document):
@@ -1027,7 +1063,7 @@ def test_deformation_uses_the_native_default_material_beside_unused_materials(de
         document["materials"].insert(0, {"name": "Unused"})
         del document["meshes"][0]["primitives"][0]["material"]
     mesh_info = deform_model(edit).load().mesh_info[0]
-    assert mesh_info.material_index == 0
+    assert mesh_info.material_index == 2
     assert mesh_info.uniforms["u_color_base"] == (1, 1, 1, 1)
 
 

@@ -278,7 +278,8 @@ class MeshInfo:
     def __init__(self, Loader loader, Mesh3 mesh, int material_index, textures: Iterable[str]):
 
         self.mesh = mesh
-        self.material_index = material_index
+        # Material overrides use document indices; native material reads use Assimp's.
+        self.material_index = loader.material_map[material_index]
 
         self.uniforms = loader.get_material_uniforms(material_index)
         self.properties = { }
@@ -736,6 +737,9 @@ cdef class Loader:
 
     cdef public object import_data
 
+    cdef public list material_map
+    "Document material indices by Assimp material index; Assimp's default maps past the authored materials."
+
 
     def load(
         self,
@@ -785,12 +789,23 @@ cdef class Loader:
             # Preserve authored material indices and valid constant UV/color attributes.
             flags &= ~(aiProcess_RemoveRedundantMaterials | aiProcess_FindInvalidData)
             flags |= aiProcess_ValidateDataStructure
-        if scene and model_data.asset.geometries:
+        geometry = scene and model_data.asset.geometries
+        if geometry:
             # Source primitive identities must survive; FindDegenerates splits off triangles collapsed at rest.
             flags &= ~(aiProcess_SplitLargeMeshes | aiProcess_FindDegenerates)
 
+        # Assimp numbers only referenced materials, in first-use order; distinct names map them back.
+        materials = self.document.get("materials", [ ])
+        names = [m.get("name") for m in materials]
+        self.import_data = None
+        if geometry or not (all(type(n) is str and n for n in names) and len(set(names)) == len(names)):
+            document = renpy.gl2.gltfscene.material_import_document(self.document) if geometry else dict(self.document)
+            if materials:
+                names = [str(i) for i in range(len(materials))]
+                document["materials"] = [dict(m, name=n) for m, n in zip(materials, names)]
+            self.import_data = renpy.gl2.gltfscene.import_bytes(document, filename)
+
         # File callbacks reacquire the GIL; native import and postprocessing need not hold it.
-        self.import_data = renpy.gl2.gltfscene.material_import_document(self.document, filename) if scene and model_data.asset.geometries else None
         try:
             with nogil:
                 self.scene = assimpio_import(filename_c, flags)
@@ -808,6 +823,7 @@ cdef class Loader:
 
             self.model_data = model_data
             self.mesh_info = { }
+            self.material_map = self.document_materials(names) if self.material else list(range(self.scene.mNumMaterials))
 
             self.load_textures()
 
@@ -1048,10 +1064,26 @@ cdef class Loader:
 
         return uniforms
 
+    def document_materials(self, names):
+        """Map each Assimp material to its document index by name; Assimp leaves its default material unnamed."""
+        cdef aiString name
+        index = {n: i for i, n in enumerate(names)}
+        rv = [ ]
+        for i in range(self.scene.mNumMaterials):
+            if aiGetMaterialString(self.scene.mMaterials[i], "?mat.name", 0, 0, &name):
+                rv.append(len(names))
+                continue
+            n = name.data[:name.length].decode()
+            if n not in index:
+                raise ValueError(f"Assimp renamed glTF material {n!r} in {self.filename!r}.")
+            rv.append(index[n])
+        return rv
+
     def get_material(self, material_index: int):
-        """Assimp appends its default material after the document's authored materials."""
+        """Takes an Assimp material index; Assimp's default material has no document entry."""
         materials = self.document.get("materials", [ ])
-        return materials[material_index] if material_index < len(materials) else { }
+        i = self.material_map[material_index]
+        return materials[i] if i < len(materials) else { }
 
     def get_material_uniforms(self, material_index: int):
 
@@ -1240,7 +1272,6 @@ cdef class Loader:
             return self.mesh_info[cache_key]
         source = self.model_data.asset.geometries[key]
         mesh = _deform_geometry(source, (0,) * source.target_count, ())
-        # Assimp numbers only the materials it imports, so an authored index can exceed its table.
         info = MeshInfo(self, mesh, material_index, self.textures)
         info.deformation = source
         for uniform in info.texture_uniforms:

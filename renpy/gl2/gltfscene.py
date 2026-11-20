@@ -318,7 +318,7 @@ def morph_weights(value, count=None):
     return tuple(renpy.gl2.gltf.number(i, "morph weight") for i in value)
 
 
-def material_import_document(document, filename):
+def material_import_document(document):
     """Feed Assimp an in-memory static copy; glTF permits duplicate joint names that its bone validator rejects."""
     result = dict(document)
     result.pop("skins", None)
@@ -332,12 +332,21 @@ def material_import_document(document, filename):
             "attributes": {key: value for key, value in primitive.get("attributes", {}).items()
                 if not key.startswith(("JOINTS_", "WEIGHTS_"))}} for primitive in mesh.get("primitives", [])]
         result["meshes"].append(copy)
-    result["buffers"] = [dict(buffer) for buffer in document.get("buffers", [])]
-    for i, buffer in enumerate(result["buffers"]):
-        if "uri" not in buffer:
-            data = Accessors(document, filename).buffer(i)
-            buffer["uri"] = "data:application/octet-stream;base64," + base64.b64encode(data).decode("ascii")
-    return json.dumps(result, separators=(",", ":")).encode("utf-8")
+    return result
+
+
+def import_bytes(document, filename):
+    """Serialize an edited copy for Assimp; a GLB keeps its binary chunk instead of re-encoding it."""
+    data = json.dumps(document, separators=(",", ":")).encode("utf-8")
+    with renpy.loader.load(filename) as f:
+        header = f.read(20)
+        if header[:4] != b"glTF":
+            return data
+        f.seek(20 + struct.unpack_from("<I", header, 12)[0])
+        rest = f.read()
+    data += b" " * (-len(data) % 4)
+    return (struct.pack("<4sII", b"glTF", 2, 20 + len(data) + len(rest))
+        + struct.pack("<I4s", len(data), b"JSON") + data + rest)
 
 
 def blend_clip(value):
