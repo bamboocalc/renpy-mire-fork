@@ -138,7 +138,7 @@ def say(who, what, *args, **kwargs):
         who(what, *args, **kwargs)
 
 
-def do_reshow_say(who, what, interact=False, *args, **kwargs):
+def do_reshow_say(who, what, *args, interact=False, **kwargs):
     if who is not None:
         who = renpy.python.py_eval(who)
 
@@ -150,10 +150,13 @@ curried_do_reshow_say = renpy.curry.curry(do_reshow_say)
 
 def get_reshow_say(**kwargs):
     kw = dict(renpy.store._last_say_kwargs)
+
+    # The say statement always records interact; a reshow doesn't interact unless asked.
+    kw.pop("interact", None)
     kw.update(kwargs)
 
     return curried_do_reshow_say(
-        renpy.store._last_say_who, renpy.store._last_say_what, renpy.store._last_say_args, **kw
+        renpy.store._last_say_who, renpy.store._last_say_what, *renpy.store._last_say_args, **kw
     )
 
 
