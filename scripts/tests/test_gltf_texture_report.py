@@ -20,7 +20,9 @@
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import json
+import shutil
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -90,3 +92,51 @@ def test_metadata_and_patterned_maps_are_not_changed(tmp_path):
     result = report(sorted(source.glob("*.glb")))
     assert result["constant_map_savings_bytes"] == 0
     assert all(path.read_bytes() == data for path, data in before.items())
+
+
+def ktx2_bytes(width, height, lengths):
+    """Makes a KTX2 header whose level index lists the given payload sizes."""
+    data = bytearray(b"\xabKTX 20\xbb\r\n\x1a\n" + struct.pack("<9I", 145, 1, width, height, 0, 0, 1, len(lengths), 0))
+    data += bytes(32)
+    offset = 80 + 24 * len(lengths)
+    for length in lengths:
+        data += struct.pack("<3Q", offset, length, length)
+        offset += length
+    return bytes(data) + bytes(sum(lengths))
+
+
+def test_gpu_ready_textures_are_sized_without_pillow(tmp_path):
+    """KTX2 counts its stored levels and Radiance HDR counts half-float RGBA, since Pillow reads neither."""
+    pytest.importorskip("PIL.Image")
+    shutil.copy(Path(__file__).parents[2] / "testcases/game/models/material-uniform.hdr", tmp_path / "sky.hdr")
+    (tmp_path / "map.ktx2").write_bytes(ktx2_bytes(8, 4, [32, 16, 16, 16]))
+    for name in ("sky.hdr", "map.ktx2"):
+        (tmp_path / (name + ".glb")).write_bytes(model_bytes(name))
+    rows = {Path(row["files"][0]).name: row for row in report(sorted(tmp_path.glob("*.glb")))["resources"]}
+    assert (rows["sky.hdr"]["width"], rows["sky.hdr"]["height"]) == (64, 32)
+    assert rows["sky.hdr"]["rgba_mipmap_bytes"] == 2 * rgba_bytes(64, 32)
+    assert rows["map.ktx2"]["rgba_mipmap_bytes"] == 80
+    assert not any(row["constant"] for row in rows.values())
+
+
+def test_unknown_texture_format_names_the_file(tmp_path):
+    """Files no loader recognizes fail with their path rather than a Pillow traceback."""
+    pytest.importorskip("PIL.Image")
+    (tmp_path / "map.bin").write_bytes(b"not an image")
+    (tmp_path / "scene.glb").write_bytes(model_bytes("map.bin"))
+    with pytest.raises(ValueError, match="map.bin"):
+        report([tmp_path / "scene.glb"])
+
+
+def test_shared_maps_are_decoded_once(tmp_path, monkeypatch):
+    """A byte-identical map referenced by several scenes is examined only for its first file."""
+    Image = pytest.importorskip("PIL.Image")
+    Image.new("RGB", (4, 4), "red").save(tmp_path / "shared.png")
+    models = [tmp_path / "day.glb", tmp_path / "night.glb"]
+    for path in models:
+        path.write_bytes(model_bytes("shared.png"))
+    opened = []
+    original = Image.open
+    monkeypatch.setattr(Image, "open", lambda *args, **kwargs: opened.append(1) or original(*args, **kwargs))
+    report(models)
+    assert len(opened) == 1

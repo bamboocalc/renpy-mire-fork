@@ -64,9 +64,26 @@ def rgba_bytes(width, height):
         width, height = max(1, width // 2), max(1, height // 2)
 
 
+def gpu_ready_size(data):
+    """Sizes the KTX2 and Radiance HDR textures the engine decodes without Pillow, as uploaded."""
+    if data[:12] == b"\xabKTX 20\xbb\r\n\x1a\n":
+        width, height, _depth, _layers, _faces, count = struct.unpack_from("<6I", data, 20)
+        return width, height, sum(struct.unpack_from("<3Q", data, 80 + 24 * i)[1] for i in range(max(count, 1)))
+    lines = io.BytesIO(data)
+    if lines.readline().strip() not in (b"#?RADIANCE", b"#?RGBE"):
+        return None
+    while lines.readline().strip():
+        pass
+    axes = lines.readline().split()
+    major, minor = int(axes[1]), int(axes[3])
+    width, height = (minor, major) if axes[0][1:] == b"Y" else (major, minor)
+    # Radiance pixels upload as half-float RGBA.
+    return width, height, 2 * rgba_bytes(width, height)
+
+
 def report(models):
     """Counts shared encoded resources and full mip chains across model transitions."""
-    from PIL import Image
+    from PIL import Image, UnidentifiedImageError
 
     resources = {}
     scenes = []
@@ -85,13 +102,24 @@ def report(models):
             data = path.read_bytes()
             digest = hashlib.sha256(data).hexdigest()
             keys.add(digest)
-            with Image.open(io.BytesIO(data)) as decoded:
-                width, height = decoded.size
-                # Metadata-bearing maps stay byte-identical, including their color-space declarations.
-                extrema = decoded.getextrema() if decoded.mode in ("RGB", "RGBA") and not decoded.info else ()
-                constant = bool(extrema) and all(low == high for low, high in extrema)
-            row = resources.setdefault(digest, {"sha256": digest, "files": [], "width": width, "height": height,
-                "encoded_bytes": len(data), "rgba_mipmap_bytes": rgba_bytes(width, height), "constant": constant})
+            row = resources.get(digest)
+            if row is None:
+                measured = gpu_ready_size(data)
+                if measured is not None:
+                    (width, height, size), constant = measured, False
+                else:
+                    try:
+                        decoded = Image.open(io.BytesIO(data))
+                    except UnidentifiedImageError:
+                        raise ValueError(f"Unsupported texture format: {path}") from None
+                    with decoded:
+                        width, height = decoded.size
+                        size = rgba_bytes(width, height)
+                        # Metadata-bearing maps stay byte-identical, including their color-space declarations.
+                        extrema = decoded.getextrema() if decoded.mode in ("RGB", "RGBA") and not decoded.info else ()
+                        constant = bool(extrema) and all(low == high for low, high in extrema)
+                row = resources[digest] = {"sha256": digest, "files": [], "width": width, "height": height,
+                    "encoded_bytes": len(data), "rgba_mipmap_bytes": size, "constant": constant}
             if str(path) not in row["files"]:
                 row["files"].append(str(path))
         scenes.append({"model": str(model), "resources": sorted(keys),

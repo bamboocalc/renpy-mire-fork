@@ -1498,7 +1498,8 @@ resources, full RGBA mip chains, and the combined working sets of scene pairs::
 
 The report identifies single-color RGB/RGBA maps without metadata as candidates
 for a separate asset review. It does not modify source files. These are asset
-estimates, not process or GPU memory measurements.
+estimates, not process or GPU memory measurements. KTX2 textures count their
+stored levels, and Radiance HDR textures count a half-float RGBA mip chain.
 Byte-identical images are counted once. Aliases with different filenames need
 to share a filename to share an image-cache entry.
 

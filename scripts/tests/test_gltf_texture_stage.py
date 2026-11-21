@@ -23,6 +23,9 @@
 
 import json
 import struct
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -96,3 +99,11 @@ def test_stage_cannot_write_into_source_or_existing_directory(tmp_path, destinat
     (tmp_path / "existing").mkdir()
     with pytest.raises(ValueError, match="new directory"):
         stage(path, tmp_path / destination)
+
+
+def test_stage_runs_as_a_file():
+    """The script runs directly as well as with python -m, since scripts/ need not be importable."""
+    script = Path(__file__).parents[1] / "gltf_texture_stage.py"
+    result = subprocess.run([sys.executable, str(script), "--help"], check=False, capture_output=True,
+        text=True, cwd=script.parent)
+    assert result.returncode == 0, result.stderr

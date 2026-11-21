@@ -332,6 +332,10 @@ def should_generate(name: str, m: object):
     return name in ["_renpy"]
 
 
+# Extensions that only build with an optional SDK, such as Live2D's Cubism, keep their ignore entries.
+OPTIONAL_STUBS = ["renpy/gl2/live2dmodel.pyi"]
+
+
 def manage_gitignore(generated_files: list[str]):
     gitignore = ROOT / ".gitignore"
 
@@ -397,7 +401,7 @@ def main():
             if p.parts[0] == "renpy":
                 generated_files.append(p.as_posix())
 
-    generated_files.sort()
+    generated_files = sorted(set(generated_files) | set(OPTIONAL_STUBS))
 
     manage_gitignore(generated_files)
     manage_vscode(generated_files)

@@ -30,7 +30,11 @@ import struct
 import tempfile
 from pathlib import Path
 
-from scripts.gltf_texture_report import read_document, texture_path
+try:
+    from scripts.gltf_texture_report import read_document, texture_path
+except ModuleNotFoundError:
+    # Running this file directly puts scripts/ itself on the import path.
+    from gltf_texture_report import read_document, texture_path
 
 
 def resize_texture(image, size, color):
@@ -42,22 +46,26 @@ def resize_texture(image, size, color):
     channels = image.convert("RGBA").split()
     alpha = channels[3].point([value / 255 for value in range(256)], "F")
     scaled_alpha = alpha.resize(size, Image.Resampling.LANCZOS)
-    alpha_values = list(scaled_alpha.get_flattened_data())
+    covered = ImageMath.lambda_eval(lambda values: values["alpha"] > 0.000001, alpha=scaled_alpha)
     linear = [value / 255 / 12.92 if value / 255 <= 0.04045 else ((value / 255 + 0.055) / 1.055)**2.4
         for value in range(256)]
+
+    def encode(values):
+        # Unpremultiply and apply the sRGB curve on whole float images; converting to L truncates, hence the 0.5.
+        low, high = values["min"], values["max"]
+        value = low(high(values["rgb"] / high(values["alpha"], 0.000001), 0.0), 1.0) * values["covered"]
+        curve = value > 0.0031308
+        return (value * 12.92 * (1 - curve) + (1.055 * value**(1/2.4) - 0.055) * curve) * 255 + 0.5
+
     output = []
     for channel in channels[:3]:
         decoded = channel.point(linear, "F")
         weighted = ImageMath.lambda_eval(lambda values: values["rgb"] * values["alpha"], rgb=decoded, alpha=alpha)
         filtered = weighted.resize(size, Image.Resampling.LANCZOS)
-        encoded = bytearray()
-        for value, coverage in zip(filtered.get_flattened_data(), alpha_values):
-            value = min(max(value / coverage, 0), 1) if coverage > 0.000001 else 0
-            value = value * 12.92 if value <= 0.0031308 else 1.055 * value**(1/2.4) - 0.055
-            encoded.append(round(value * 255))
-        output.append(Image.frombytes("L", size, bytes(encoded)))
+        output.append(ImageMath.lambda_eval(encode, rgb=filtered, alpha=scaled_alpha, covered=covered).convert("L"))
     if image.mode == "RGBA":
-        output.append(Image.frombytes("L", size, bytes(round(min(max(value, 0), 1) * 255) for value in alpha_values)))
+        output.append(ImageMath.lambda_eval(lambda values: values["min"](values["max"](values["alpha"], 0.0), 1.0)
+            * 255 + 0.5, alpha=scaled_alpha).convert("L"))
     return Image.merge(image.mode, output)
 
 
