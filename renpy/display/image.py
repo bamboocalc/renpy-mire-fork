@@ -404,6 +404,7 @@ class ImageReference(renpy.display.displayable.Displayable):
 
         if isinstance(name, renpy.display.displayable.Displayable):
             self.target = name
+            self._save_target = name._save_target
             return True
 
         if not isinstance(name, tuple):
@@ -445,6 +446,7 @@ class ImageReference(renpy.display.displayable.Displayable):
         try:
             a = self._args.copy(name=name, args=args)
             self.target = target._duplicate(a)
+            self._save_target = self.target._save_target
             if self.target._save_target:
                 self.param_target = self.target
 

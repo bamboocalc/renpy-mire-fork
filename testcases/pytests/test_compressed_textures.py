@@ -84,8 +84,11 @@ def test_ktx2_levels_and_premultiplied_flag():
         (b"PNG" + make_ktx2()[3:], "not a KTX2 file"),
         (make_ktx2(scheme=2), "no supercompression"),
         (make_ktx2()[:-1], "truncated"),
+        (make_ktx2()[:60], "truncated"),
+        (make_ktx2()[:100], "truncated"),
+        (make_ktx2(height=0), "2D"),
     ],
-    ids=["identifier", "supercompression", "truncated"],
+    ids=["identifier", "supercompression", "truncated", "short_header", "short_index", "one_dimensional"],
 )
 def test_ktx2_rejects_unsupported_files(data, message):
     with pytest.raises(Exception, match=message):

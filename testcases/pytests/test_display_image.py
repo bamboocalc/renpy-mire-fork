@@ -27,6 +27,7 @@ import pytest
 
 import renpy.display.image as image_module
 from renpy.display.displayable import Displayable
+from renpy.display.layout import Container
 from renpy.display.render import Render
 
 
@@ -48,17 +49,30 @@ class SizedImage(Displayable):
 
 
 @pytest.mark.parametrize("retain", [False, True])
-def test_named_image_restores_opted_in_target_state(mocker, retain):
+@pytest.mark.parametrize("wrapper", ["direct", "alias", "container"])
+def test_named_image_restores_opted_in_target_state(mocker, retain, wrapper):
     """Animated images retain their saved instance; ordinary images keep rebuilding their target from its definition."""
     mocker.patch.dict(image_module.images, {("saved_target_probe",): SizedImage(20, retain)})
-    reference = image_module.ImageReference(("saved_target_probe",))
+    name = ("saved_target_probe",)
+    if wrapper != "direct":
+        inner = image_module.ImageReference(name)
+        name = ("wrapped_target_probe",)
+        if wrapper == "container":
+            inner = Container(inner)
+        mocker.patch.dict(image_module.images, {name: inner})
+
+    def leaf(reference):
+        child = reference._target()
+        return child.children[0]._target() if wrapper == "container" else child
+
+    reference = image_module.ImageReference(name)
     reference.find_target()
-    reference.visit()[0].width = 10
+    leaf(reference).width = 10
     restored = pickle.loads(pickle.dumps(reference))
     restored.find_target()
-    assert restored.visit()[0].render(100, 100, 0, 0).get_size() == (10 if retain else 20, 1)
+    assert leaf(restored).render(100, 100, 0, 0).get_size() == (10 if retain else 20, 1)
     fresh = reference._duplicate(None)
-    assert fresh.visit()[0].render(100, 100, 0, 0).get_size() == (20, 1)
+    assert leaf(fresh).render(100, 100, 0, 0).get_size() == (20, 1)
 
 
 def test_image_reference_explicit_alt(mocker):

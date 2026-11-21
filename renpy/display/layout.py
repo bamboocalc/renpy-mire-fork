@@ -164,6 +164,8 @@ class Container(renpy.display.displayable.Displayable):
         for i in rv.children:
             if i._duplicatable:
                 rv._duplicatable = True
+            if i._save_target:
+                rv._save_target = True
 
         return rv
 

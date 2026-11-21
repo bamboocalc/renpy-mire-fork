@@ -723,11 +723,13 @@ class RotoZoom(renpy.display.displayable.Displayable):
         else:
             zoom_time /= self.zoom_delay
 
-        if self.rot_repeat:
-            rot_time %= 1.0
+        # Judged before folding, since a bounce reaches 1.0 at its turnaround.
+        running = (self.rot_delay and (self.rot_repeat or rot_time < 1.0)) or (
+            self.zoom_delay and (self.zoom_repeat or zoom_time < 1.0)
+        )
 
-        if self.zoom_repeat:
-            zoom_time %= 1.0
+        rot_time = rot_time % 1.0 if self.rot_repeat else min(rot_time, 1.0)
+        zoom_time = zoom_time % 1.0 if self.zoom_repeat else min(zoom_time, 1.0)
 
         if self.rot_bounce:
             rot_time *= 2
@@ -740,12 +742,7 @@ class RotoZoom(renpy.display.displayable.Displayable):
         if renpy.game.less_updates:
             rot_time = 1.0
             zoom_time = 1.0
-
-        # Checked before clamping, which would make every time look unfinished.
-        running = rot_time < 1.0 or zoom_time < 1.0
-
-        rot_time = min(rot_time, 1.0)
-        zoom_time = min(zoom_time, 1.0)
+            running = False
 
         if self.rot_time_warp:
             rot_time = self.rot_time_warp(rot_time)

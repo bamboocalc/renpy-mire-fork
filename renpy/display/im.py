@@ -74,7 +74,7 @@ class CacheEntry:
             if mipmap is None:
                 mipmap = renpy.config.mipmap
             if mipmap == "auto":
-                mipmap = renpy.display.draw.auto_mipmap
+                mipmap = getattr(renpy.display.draw, "auto_mipmap", False)
             self.hdr_texture_size = surf.get_texture_size(mipmap)
 
     def size(self) -> int:
@@ -1286,7 +1286,8 @@ class UnoptimizedTexture(ImageBase):
                 return rv
 
         # A RawTexture goes straight to the GPU, which never reads the border of a copied surface.
-        if isinstance(self.image, Image):
+        # Subclasses that override load predate the copy argument.
+        if type(self.image).load is Image.load:
             return self.image.load(copy=False)
 
         return self.image.load()
@@ -1404,12 +1405,18 @@ def load_ktx2(data: bytes, filename: str) -> CompressedImage:
     if data[:12] != KTX2_IDENTIFIER:
         raise Exception(f"{filename!r} is not a KTX2 file.")
 
+    if len(data) < 80:
+        raise Exception(f"{filename!r} is truncated.")
+
     header = struct.unpack_from("<9I", data, 12)
     vk_format, _type_size, width, height, depth, layers, faces, level_count, scheme = header
     dfd_offset, dfd_length = struct.unpack_from("<2I", data, 48)
 
-    if depth or layers or faces != 1 or scheme:
+    if depth or layers or faces != 1 or scheme or not width or not height:
         raise Exception(f"{filename!r} must be a 2D KTX2 texture with one face, no layers, and no supercompression.")
+
+    if 80 + 24 * max(level_count, 1) > len(data) or dfd_offset + dfd_length > len(data):
+        raise Exception(f"{filename!r} is truncated.")
 
     levels = []
 

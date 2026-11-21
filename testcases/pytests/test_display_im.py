@@ -242,6 +242,17 @@ def test_color_space_and_sampler_keep_separate_textures(cache):
     assert cache.get(color, texture=True) is color_texture
 
 
+def test_raw_texture_keeps_legacy_image_load_override():
+    """Image subclasses written before RawTexture's copy=False fast path override load(self, unscaled=False)."""
+    surface = renpy.display.pgrender.surface((4, 4), True)
+
+    class Legacy(im.Image):
+        def load(self, unscaled=False):
+            return surface
+
+    assert im.UnoptimizedTexture(Legacy("legacy.png"), premultiply=False).load() is surface
+
+
 def test_srgb_requires_straight_alpha():
     """Premultiplying encoded color before sRGB decoding would corrupt both filtering and material calculations."""
     with pytest.raises(ValueError, match="premultiply=False"):

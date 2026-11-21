@@ -374,8 +374,11 @@ screen assimp_scene_live(model):
     add Solid("#000", xysize=(400, 300))
     add model pos (0, 0)
 
-image assimp_scene_animated = assimp_scene__camera(animation="Slide")
-image assimp_scene_animated_hdr = GLTFScene(assimp_scene__camera(animation="Slide"), light_color=(0, 0, 0))
+# Quarter speed covers x=200 from 2 to 6 seconds, leaving slow save/load timing room.
+image assimp_scene_animated = assimp_scene__camera(animation="Slide", animation_speed=0.25)
+image assimp_scene_animated_hdr = GLTFScene(assimp_scene__camera(animation="Slide", animation_speed=0.25), light_color=(0, 0, 0))
+image assimp_scene_animated_alias = "assimp_scene_animated"
+image assimp_scene_animated_box = Fixed("assimp_scene_animated")
 image assimp_deform_animated = assimp_deform__scene(animation="Expand")
 image assimp_deform_blended = assimp_deform__scene(animation="Bend", animation_time=2, animation_blend=("Expand", 1), animation_blend_duration=0.1)
 
@@ -383,8 +386,16 @@ label assimp_scene_timed_hdr_save:
     call assimp_scene_timed_save(True)
     return
 
-label assimp_scene_timed_save(hdr=False):
-    show expression ("assimp_scene_animated_hdr" if hdr else "assimp_scene_animated") as assimp_scene_anim:
+label assimp_scene_timed_alias_save:
+    call assimp_scene_timed_save(image_name="assimp_scene_animated_alias")
+    return
+
+label assimp_scene_timed_box_save:
+    call assimp_scene_timed_save(image_name="assimp_scene_animated_box")
+    return
+
+label assimp_scene_timed_save(hdr=False, image_name=None):
+    show expression (image_name or ("assimp_scene_animated_hdr" if hdr else "assimp_scene_animated")) as assimp_scene_anim:
         pos (0, 0)
         anchor (0, 0)
     "Door starts moving."
@@ -1792,18 +1803,18 @@ testsuite assimp_scene:
         run MainMenu(confirm=False)
 
     testcase save_active_playback:
-        parameter hdr = [False, True]
+        parameter variant = ["", "_hdr", "_alias", "_box"]
         description "Loading an actively playing scene restores its shown-time rather than restarting the clip at its first frame."
 
-        run Start("assimp_scene_timed_hdr_save" if hdr else "assimp_scene_timed_save")
+        run Start("assimp_scene_timed" + variant + "_save")
         advance until "Door moving."
-        pause 1.0
+        pause 3.0
         run Function(renpy.save, "assimp-scene-timed-test")
         pause 0.3
         run Function(renpy.load, "assimp-scene-timed-test")
         pause until "Door moving."
         pause 0.05
         $ _scene_pixel = assimp_scene__screen_pixel(200)
-        assert eval assimp_alpha__close(_scene_pixel, assimp_pbr__expected((1, 0, 0)) if hdr else (255, 0, 0, 255))
+        assert eval assimp_alpha__close(_scene_pixel, assimp_pbr__expected((1, 0, 0)) if variant == "_hdr" else (255, 0, 0, 255))
         run Function(renpy.unlink_save, "assimp-scene-timed-test")
         run MainMenu(confirm=False)
