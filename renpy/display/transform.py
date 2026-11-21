@@ -1192,19 +1192,49 @@ class Transform(Container):
         if not offsets:
             return None
 
-        for i in range(len(self.children) - 1, -1, -1):
-            d = children[i]
-            xo, yo = offsets[i]
+        stack = renpy.display.render._projective_event_stack
+        is_perspective = bool(self.state.perspective)
+        same_event = bool(stack) and stack[-1][0] is ev
+        m_child = None
 
-            cx = x - xo
-            cy = y - yo
+        if is_perspective or same_event:
+            matrices = renpy.display.render.get_projective_matrices(self)
+            if same_event:
+                _, sx, sy = stack[-1]
+            elif matrices is not None:
+                sx, sy = matrices[0].transform(x, y)
+            else:
+                sx, sy = x, y
+            if matrices is not None:
+                m_child = matrices[1]
+        if is_perspective:
+            stack.append((ev, sx, sy))
 
-            # Transform screen coordinates to child coordinates.
-            cx, cy = self.forward.transform(cx, cy)
+        try:
+            for i in range(len(self.children) - 1, -1, -1):
+                d = children[i]
 
-            rv = d.event(ev, cx, cy, st)
-            if rv is not None:
-                return rv
+                if m_child is not None:
+                    pt = renpy.display.render.unproject_matrix(m_child, sx, sy)
+                    if pt is None:
+                        cx, cy = -1000000.0, -1000000.0
+                    else:
+                        cx, cy = pt
+                else:
+                    xo, yo = offsets[i]
+
+                    cx = x - xo
+                    cy = y - yo
+
+                    # Transform screen coordinates to child coordinates.
+                    cx, cy = self.forward.transform(cx, cy)
+
+                rv = d.event(ev, cx, cy, st)
+                if rv is not None:
+                    return rv
+        finally:
+            if is_perspective:
+                stack.pop()
 
         return None
 

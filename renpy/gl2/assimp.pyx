@@ -2433,7 +2433,7 @@ class GLTFScene(Displayable):
         profiler = getattr(renpy.display.draw, "gltf_profile", None)
         if profiler is not None:
             started = time.perf_counter()
-        child = renpy.display.render.render(self.child, width, height, st, at)
+        child = source = renpy.display.render.render(self.child, width, height, st, at)
         original_size = child.get_size()
         coverage, region = None, (0, 0, 1, 1)
         if self.refraction_margin:
@@ -2540,7 +2540,10 @@ class GLTFScene(Displayable):
             scene = renpy.gl2.gltf.peeled_scene(scene, meshes, self.transparency_layers, refractive)
 
         rv = Render(*original_size)
-        rv.blit(scene, (0, 0))
+        rv.blit(scene, (0, 0), focus=coverage is None)
+        if coverage is not None:
+            # The output shader crops the expanded guard back onto the unexpanded child, which supplies focus.
+            rv.depends_on(source, focus=True)
         rv.mesh = True
         rv.add_shader("renpy.gltf.output")
         if coverage is not None:

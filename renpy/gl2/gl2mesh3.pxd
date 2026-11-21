@@ -38,4 +38,6 @@ cdef class Mesh3(Mesh):
 
     cpdef bint is_visible(self, Matrix transform)
 
+    cpdef object ray_hit(self, Matrix transform, double sx, double sy, object cull_face=*, double max_z=*, bint any_hit=*)
+
     cpdef Mesh3 crop(Mesh3 self, Polygon p)

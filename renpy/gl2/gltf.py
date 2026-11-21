@@ -426,7 +426,8 @@ def peeled_scene(scene, meshes, layers, refractive):
     def variant(mode, shader=None):
         result = Render(width, height)
         for child, x, y, focus, main in scene.children:
-            result.blit(child, (x, y), focus=focus, main=main)
+            # Every pass redraws the same displayables; only the opaque pass reports their focus.
+            result.blit(child, (x, y), focus=focus and mode == "opaque", main=main)
         for name, value in (scene.uniforms or {}).items():
             result.add_uniform(name, value)
         for name, value in (scene.properties or {}).items():

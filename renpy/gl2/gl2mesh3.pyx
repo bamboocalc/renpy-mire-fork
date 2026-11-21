@@ -22,7 +22,7 @@
 from __future__ import print_function
 
 from libc.stdlib cimport malloc, free
-from libc.math cimport hypot, fabsf, isfinite
+from libc.math cimport hypot, fabs, fabsf, isfinite
 
 from renpy.gl2.gl2polygon cimport Polygon, Point2
 from renpy.gl2.gl2mesh cimport Mesh, AttributeLayout
@@ -252,6 +252,199 @@ cdef class Mesh3(Mesh):
                 return True
 
         return False
+
+    cpdef object ray_hit(Mesh3 self, Matrix transform, double sx, double sy, object cull_face=None,
+            double max_z=2.0, bint any_hit=False):
+        """Returns a hit before max_z in clip depth [-1, 1], nearest unless any_hit is requested."""
+
+        if self.triangles <= 0 or self.points <= 0:
+            return None
+
+        cdef int i, pos_w = 0, cull_mode = 0
+        cdef float px, py, pz, pw, nx, ny, nz, nw, fx, fy, fz, fw
+        cdef float ax0, ay0, az0, aw0, ax1, ay1, az1, aw1, ax2, ay2, az2, aw2
+        cdef double bx0, by0, bz0, bx1, by1, bz1
+        cdef double minx = 0.0, maxx = 0.0, miny = 0.0, maxy = 0.0, vx, vy
+        cdef double ox, oy, oz, dx, dy, dz
+        cdef double tmin, tmax, t1, t2, inv_d, tmp
+        cdef double v0x, v0y, v0z, e1x, e1y, e1z, e2x, e2y, e2z
+        cdef double pvecx, pvecy, pvecz, tvecx, tvecy, tvecz, qvecx, qvecy, qvecz
+        cdef double det, inv_det, u, v, t, hx, hy, hz, z_ndc, cross_h
+        cdef double best_z = max_z, minz = 2.0
+        cdef bint hit = False
+        cdef unsigned int i0, i1, i2
+        cdef Point3 *pts = self.point
+        cdef unsigned int *tris = self.triangle
+        cdef Matrix inv
+
+        if cull_face == "ccw":
+            cull_mode = 1
+        elif cull_face == "cw":
+            cull_mode = 2
+
+        if self.bounds is not None:
+            bx0, by0, bz0, bx1, by1, bz1 = self.bounds
+            for i in range(8):
+                transform.transform4(&px, &py, &pz, &pw,
+                    <float> (bx1 if i & 1 else bx0),
+                    <float> (by1 if i & 2 else by0),
+                    <float> (bz1 if i & 4 else bz0),
+                    1.0)
+                if pw > 1e-6:
+                    vx = px / pw
+                    vy = py / pw
+                    minz = min(minz, <double> pz / pw)
+                    if pos_w == 0:
+                        minx = maxx = vx
+                        miny = maxy = vy
+                    else:
+                        if vx < minx: minx = vx
+                        if vx > maxx: maxx = vx
+                        if vy < miny: miny = vy
+                        if vy > maxy: maxy = vy
+                    pos_w += 1
+            if pos_w == 0:
+                return None
+            if pos_w == 8 and (sx < minx - 1.0 or sx > maxx + 1.0 or sy < miny - 1.0 or sy > maxy + 1.0
+                    or minz > max_z + 1e-5):
+                return None
+
+        inv = transform.inverse()
+        # z_ndc=0 stays finite even for infinite-far perspective cameras.
+        inv.transform4(&nx, &ny, &nz, &nw, <float> sx, <float> sy, -1.0, 1.0)
+        inv.transform4(&fx, &fy, &fz, &fw, <float> sx, <float> sy, 0.0, 1.0)
+        if fabs(nw) < 1e-12 or fabs(fw) < 1e-12:
+            return None
+
+        ox = nx / nw
+        oy = ny / nw
+        oz = nz / nw
+        dx = fx / fw - ox
+        dy = fy / fw - oy
+        dz = fz / fw - oz
+        if dx * dx + dy * dy + dz * dz < 1e-24:
+            return None
+
+        if self.bounds is not None:
+            tmin = -1e30
+            tmax = 1e30
+            if fabs(dx) < 1e-12:
+                if ox < bx0 - 1e-5 or ox > bx1 + 1e-5:
+                    return None
+            else:
+                inv_d = 1.0 / dx
+                t1 = (bx0 - 1e-5 - ox) * inv_d
+                t2 = (bx1 + 1e-5 - ox) * inv_d
+                if t1 > t2:
+                    tmp = t1; t1 = t2; t2 = tmp
+                if t1 > tmin: tmin = t1
+                if t2 < tmax: tmax = t2
+                if tmin > tmax:
+                    return None
+
+            if fabs(dy) < 1e-12:
+                if oy < by0 - 1e-5 or oy > by1 + 1e-5:
+                    return None
+            else:
+                inv_d = 1.0 / dy
+                t1 = (by0 - 1e-5 - oy) * inv_d
+                t2 = (by1 + 1e-5 - oy) * inv_d
+                if t1 > t2:
+                    tmp = t1; t1 = t2; t2 = tmp
+                if t1 > tmin: tmin = t1
+                if t2 < tmax: tmax = t2
+                if tmin > tmax:
+                    return None
+
+            if fabs(dz) < 1e-12:
+                if oz < bz0 - 1e-5 or oz > bz1 + 1e-5:
+                    return None
+            else:
+                inv_d = 1.0 / dz
+                t1 = (bz0 - 1e-5 - oz) * inv_d
+                t2 = (bz1 + 1e-5 - oz) * inv_d
+                if t1 > t2:
+                    tmp = t1; t1 = t2; t2 = tmp
+                if t1 > tmin: tmin = t1
+                if t2 < tmax: tmax = t2
+                if tmin > tmax:
+                    return None
+
+        for i in range(self.triangles):
+            i0 = tris[i * 3]
+            i1 = tris[i * 3 + 1]
+            i2 = tris[i * 3 + 2]
+            if i0 >= <unsigned int> self.points or i1 >= <unsigned int> self.points or i2 >= <unsigned int> self.points:
+                continue
+
+            v0x = pts[i0].x
+            v0y = pts[i0].y
+            v0z = pts[i0].z
+            e1x = pts[i1].x - v0x
+            e1y = pts[i1].y - v0y
+            e1z = pts[i1].z - v0z
+            e2x = pts[i2].x - v0x
+            e2y = pts[i2].y - v0y
+            e2z = pts[i2].z - v0z
+
+            pvecx = dy * e2z - dz * e2y
+            pvecy = dz * e2x - dx * e2z
+            pvecz = dx * e2y - dy * e2x
+            det = e1x * pvecx + e1y * pvecy + e1z * pvecz
+            if fabs(det) < 1e-12:
+                continue
+
+            inv_det = 1.0 / det
+            tvecx = ox - v0x
+            tvecy = oy - v0y
+            tvecz = oz - v0z
+            u = (tvecx * pvecx + tvecy * pvecy + tvecz * pvecz) * inv_det
+            if u < -1e-6 or u > 1.0 + 1e-6:
+                continue
+
+            qvecx = tvecy * e1z - tvecz * e1y
+            qvecy = tvecz * e1x - tvecx * e1z
+            qvecz = tvecx * e1y - tvecy * e1x
+            v = (dx * qvecx + dy * qvecy + dz * qvecz) * inv_det
+            if v < -1e-6 or u + v > 1.0 + 1e-6:
+                continue
+
+            t = (e2x * qvecx + e2y * qvecy + e2z * qvecz) * inv_det
+            hx = ox + t * dx
+            hy = oy + t * dy
+            hz = oz + t * dz
+
+            transform.transform4(&px, &py, &pz, &pw, <float> hx, <float> hy, <float> hz, 1.0)
+            if pw <= 1e-6:
+                continue
+
+            z_ndc = pz / pw
+            if z_ndc < -1.0 or z_ndc > 1.0 or z_ndc >= best_z:
+                continue
+
+            if cull_mode != 0:
+                transform.transform4(&ax0, &ay0, &az0, &aw0, pts[i0].x, pts[i0].y, pts[i0].z, 1.0)
+                transform.transform4(&ax1, &ay1, &az1, &aw1, pts[i1].x, pts[i1].y, pts[i1].z, 1.0)
+                transform.transform4(&ax2, &ay2, &az2, &aw2, pts[i2].x, pts[i2].y, pts[i2].z, 1.0)
+                cross_h = (
+                    <double> ax0 * (<double> ay1 * aw2 - <double> aw1 * ay2)
+                    - <double> ay0 * (<double> ax1 * aw2 - <double> aw1 * ax2)
+                    + <double> aw0 * (<double> ax1 * ay2 - <double> ay1 * ax2)
+                )
+                if cull_mode == 1 and cross_h <= 0.0:
+                    continue
+                if cull_mode == 2 and cross_h >= 0.0:
+                    continue
+
+            if any_hit:
+                return z_ndc
+            best_z = z_ndc
+            hit = True
+
+        if hit:
+            return best_z
+
+        return None
 
     def get_point0(Mesh3 self):
         """

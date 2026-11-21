@@ -24,6 +24,7 @@ from __future__ import print_function
 
 from renpy.display.matrix import Matrix, Matrix2D
 from renpy.display.matrix cimport Matrix, Matrix2D
+from libc.math cimport fabs
 
 # This is required to get these to re-export despite having been defined
 # in cython.
@@ -52,6 +53,13 @@ redraw_queue = [ ]
 
 # The render returned from render_screen.
 screen_render = None
+
+# Lazy per-frame id(displayable) -> (to_screen, child_to_screen) map for projective event unprojection.
+_projective_map = None
+_projective_map_built = False
+
+# Active events and screen-space coordinates, scoped to Transform.event's call stack.
+_projective_event_stack = [ ]
 
 # A list of renders the system knows about, and thinks are still alive.
 cdef list live_renders
@@ -109,7 +117,11 @@ def free_memory():
     """
 
     global screen_render
+    global _projective_map
+    global _projective_map_built
     screen_render = None
+    _projective_map = None
+    _projective_map_built = False
 
     mark_sweep()
 
@@ -482,6 +494,8 @@ def render_screen(root, width, height):
     global screen_render
     global invalidated
     global frame_time
+    global _projective_map
+    global _projective_map_built
 
     interact_time = renpy.display.interface.interact_time
     frame_time = renpy.display.interface.frame_time
@@ -493,6 +507,8 @@ def render_screen(root, width, height):
 
     rv = render(root, width, height, st, st)
     screen_render = rv
+    _projective_map = None
+    _projective_map_built = False
 
     invalidated = False
 
@@ -562,6 +578,526 @@ FLATTEN = 4
 MATRIX_VIEW = 0
 MATRIX_MODEL = 1
 MATRIX_PROJECTION = 2
+
+
+cdef inline bint is_projective_matrix(Matrix m) noexcept:
+    return (m is not None) and (m.wdx != 0.0 or m.wdy != 0.0 or m.wdz != 0.0 or m.wdw != 1.0)
+
+
+cdef inline bint is_projective_render(Render r) noexcept:
+    return r.matrix_kind == MATRIX_PROJECTION or is_projective_matrix(r.reverse)
+
+
+cdef inline float determinant3(Matrix m) noexcept:
+    return (
+        m.xdx * (m.ydy * m.zdz - m.ydz * m.zdy)
+        - m.xdy * (m.ydx * m.zdz - m.ydz * m.zdx)
+        + m.xdz * (m.ydx * m.zdy - m.ydy * m.zdx)
+    )
+
+
+cdef inline object resolve_gltf_cull_face(object cull_face, dict props, float det_sign):
+    if props is not None and props.get("gltf_winding", False) and det_sign > 0.0:
+        if cull_face == "ccw":
+            return "cw"
+        elif cull_face == "cw":
+            return "ccw"
+    return cull_face
+
+
+cdef inline bint unproject_plane(Matrix m, double sx, double sy, double *out_u, double *out_v, double *out_z) noexcept:
+    """Inverts the 2D projective homography of local z=0 onto screen pixel (sx, sy)."""
+
+    cdef double a00 = m.xdx - sx * m.wdx
+    cdef double a01 = m.xdy - sx * m.wdy
+    cdef double b0 = sx * m.wdw - m.xdw
+    cdef double a10 = m.ydx - sy * m.wdx
+    cdef double a11 = m.ydy - sy * m.wdy
+    cdef double b1 = sy * m.wdw - m.ydw
+    cdef double det = a00 * a11 - a01 * a10
+
+    if fabs(det) < 1e-12:
+        return False
+
+    cdef double inv_det = 1.0 / det
+    cdef double u = (b0 * a11 - a01 * b1) * inv_det
+    cdef double v = (a00 * b1 - b0 * a10) * inv_det
+    cdef double w = m.wdx * u + m.wdy * v + m.wdw
+
+    if w <= 1e-6:
+        return False
+
+    cdef double z_ndc = (m.zdx * u + m.zdy * v + m.zdw) / w
+
+    if z_ndc < -1.0 or z_ndc > 1.0:
+        return False
+
+    out_u[0] = u
+    out_v[0] = v
+    out_z[0] = z_ndc
+    return True
+
+
+def unproject_matrix(Matrix m, double sx, double sy):
+    """Returns (u, v) on local z=0 projecting to screen (sx, sy), or None if behind or clipped."""
+
+    cdef double u, v, z_ndc
+    if unproject_plane(m, sx, sy, &u, &v, &z_ndc):
+        return (u, v)
+    return None
+
+
+cdef bint render_has_mesh3(Render r):
+    if r.mesh is not None and r.mesh is not True and hasattr(r.mesh, "ray_hit"):
+        return True
+    for child, _xo, _yo, _focus, _main in r.children:
+        if isinstance(child, Render) and render_has_mesh3(<Render> child):
+            return True
+    return False
+
+
+# Nearest hits from focus-mask scans in the current focus_at_point, so occlusion needn't rescan a button's mesh.
+cdef dict mesh_hits = { }
+
+
+cdef object mesh_tree_ray_hit(Render r, Matrix transform, double sx, double sy, object cull_face, float det_sign):
+    cdef dict props = r.properties
+    cdef object local_cull = cull_face
+    cdef object hit_z, child_hit, best_z = None
+    cdef float child_det = det_sign
+    cdef Matrix child_transform
+
+    if props is not None:
+        if props.get("gltf_pass"):
+            return None
+        cf = props.get("cull_face", False)
+        if cf is not False:
+            local_cull = cf
+
+    if (r.reverse is not None) and (r.reverse is not IDENTITY):
+        if r.matrix_kind == MATRIX_PROJECTION:
+            child_det = 1.0
+        elif determinant3(r.reverse) < 0.0:
+            child_det = -det_sign
+
+    if r.mesh is not None and r.mesh is not True and hasattr(r.mesh, "ray_hit"):
+        mesh_transform = transform
+        if (r.reverse is not None) and (r.reverse is not IDENTITY):
+            mesh_transform = mesh_transform * r.reverse
+        eff_cull = resolve_gltf_cull_face(local_cull, props, child_det)
+        hit_z = r.mesh.ray_hit(mesh_transform, sx, sy, eff_cull)
+        mesh_hits[id(r)] = (mesh_transform, eff_cull, hit_z)
+        if hit_z is not None:
+            best_z = hit_z
+
+    for child, xo, yo, _focus, _main in r.children:
+        if not isinstance(child, Render):
+            continue
+        child_transform = transform
+        if xo or yo:
+            child_transform = child_transform * Matrix.coffset(xo, yo, 0)
+        if (r.reverse is not None) and (r.reverse is not IDENTITY):
+            child_transform = child_transform * r.reverse
+        child_hit = mesh_tree_ray_hit(<Render> child, child_transform, sx, sy, local_cull, child_det)
+        if child_hit is not None and (best_z is None or child_hit < best_z):
+            best_z = child_hit
+
+    return best_z
+
+
+cdef object project_rect_bounds(Matrix transform, double x0, double y0, double x1, double y1):
+    cdef float px, py, pz, pw
+    cdef double vx, vy, minx = 0.0, maxx = 0.0, miny = 0.0, maxy = 0.0
+    cdef int i, count = 0
+
+    for i in range(4):
+        transform.transform4(&px, &py, &pz, &pw,
+            <float> (x1 if i & 1 else x0),
+            <float> (y1 if i & 2 else y0),
+            0.0, 1.0)
+        # Corners outside the depth range are clipped, as in unproject_plane.
+        if pw > 1e-6 and -pw <= pz <= pw:
+            vx = px / pw
+            vy = py / pw
+            if count == 0:
+                minx = maxx = vx
+                miny = maxy = vy
+            else:
+                if vx < minx: minx = vx
+                if vx > maxx: maxx = vx
+                if vy < miny: miny = vy
+                if vy > maxy: maxy = vy
+            count += 1
+
+    if count == 0:
+        return None
+    return (minx, miny, maxx, maxy)
+
+
+cdef void collect_mesh3_screen_bounds(Render r, Matrix transform, list acc):
+    cdef float px, py, pz, pw
+    cdef double vx, vy
+    cdef int i
+    cdef Matrix child_transform, mesh_transform
+
+    if r.mesh is not None and r.mesh is not True and hasattr(r.mesh, "ray_hit"):
+        mesh_transform = transform
+        if (r.reverse is not None) and (r.reverse is not IDENTITY):
+            mesh_transform = mesh_transform * r.reverse
+        bounds = getattr(r.mesh, "bounds", None)
+        if bounds is not None:
+            x0, y0, z0, x1, y1, z1 = bounds
+            for i in range(8):
+                mesh_transform.transform4(&px, &py, &pz, &pw,
+                    <float> (x1 if i & 1 else x0),
+                    <float> (y1 if i & 2 else y0),
+                    <float> (z1 if i & 4 else z0),
+                    1.0)
+                if pw > 1e-6:
+                    vx = px / pw
+                    vy = py / pw
+                    if acc[4] == 0:
+                        acc[0] = acc[2] = vx
+                        acc[1] = acc[3] = vy
+                    else:
+                        if vx < acc[0]: acc[0] = vx
+                        if vx > acc[2]: acc[2] = vx
+                        if vy < acc[1]: acc[1] = vy
+                        if vy > acc[3]: acc[3] = vy
+                    acc[4] += 1
+        else:
+            for pt in r.mesh.get_points():
+                mesh_transform.transform4(&px, &py, &pz, &pw, pt[0], pt[1], pt[2], 1.0)
+                if pw > 1e-6:
+                    vx = px / pw
+                    vy = py / pw
+                    if acc[4] == 0:
+                        acc[0] = acc[2] = vx
+                        acc[1] = acc[3] = vy
+                    else:
+                        if vx < acc[0]: acc[0] = vx
+                        if vx > acc[2]: acc[2] = vx
+                        if vy < acc[1]: acc[1] = vy
+                        if vy > acc[3]: acc[3] = vy
+                    acc[4] += 1
+
+    for child, xo, yo, _focus, _main in r.children:
+        if not isinstance(child, Render):
+            continue
+        child_transform = transform
+        if xo or yo:
+            child_transform = child_transform * Matrix.coffset(xo, yo, 0)
+        if (r.reverse is not None) and (r.reverse is not IDENTITY):
+            child_transform = child_transform * r.reverse
+        collect_mesh3_screen_bounds(<Render> child, child_transform, acc)
+
+
+cdef void _collect_projective_matrices(Render r, Matrix transform, bint in_projective, dict out_map):
+    cdef bint local_projective = in_projective or is_projective_render(r)
+    cdef Render cur, rv_child
+    cdef Matrix mc, child_transform
+
+    if (not local_projective) and (r.mesh is True) and len(r.children) == 1:
+        first_child = r.children[0][0]
+        if isinstance(first_child, Render) and is_projective_render(<Render> first_child):
+            local_projective = True
+
+    if local_projective and r.render_of:
+        cur = r
+        mc = transform
+
+        if (cur.mesh is True) and len(cur.children) == 1:
+            first_child = cur.children[0][0]
+            if isinstance(first_child, Render) and is_projective_render(<Render> first_child):
+                cx = cur.children[0][1]
+                cy = cur.children[0][2]
+                if cx or cy:
+                    mc = mc * Matrix.coffset(cx, cy, 0)
+                if (cur.reverse is not None) and (cur.reverse is not IDENTITY):
+                    mc = mc * cur.reverse
+                cur = <Render> first_child
+
+        if cur.matrix_kind == MATRIX_PROJECTION and cur.children:
+            first_child = cur.children[0][0]
+            cx = cur.children[0][1]
+            cy = cur.children[0][2]
+            if cx or cy:
+                mc = mc * Matrix.coffset(cx, cy, 0)
+            if (cur.reverse is not None) and (cur.reverse is not IDENTITY):
+                mc = mc * cur.reverse
+            if isinstance(first_child, Render) and (<Render> first_child).matrix_kind == MATRIX_VIEW:
+                rv_child = <Render> first_child
+                if rv_child.children:
+                    vx = rv_child.children[0][1]
+                    vy = rv_child.children[0][2]
+                    if vx or vy:
+                        mc = mc * Matrix.coffset(vx, vy, 0)
+                if (rv_child.reverse is not None) and (rv_child.reverse is not IDENTITY):
+                    mc = mc * rv_child.reverse
+        else:
+            if cur.children:
+                cx = cur.children[0][1]
+                cy = cur.children[0][2]
+                if cx or cy:
+                    mc = mc * Matrix.coffset(cx, cy, 0)
+            if (cur.reverse is not None) and (cur.reverse is not IDENTITY):
+                mc = mc * cur.reverse
+
+        for obj in r.render_of:
+            out_map[id(obj)] = (transform, mc)
+
+    for child, cx, cy, _focus, _main in r.children:
+        if not isinstance(child, Render):
+            continue
+        child_transform = transform
+        if cx or cy:
+            child_transform = child_transform * Matrix.coffset(cx, cy, 0)
+        if (r.reverse is not None) and (r.reverse is not IDENTITY):
+            child_transform = child_transform * r.reverse
+        _collect_projective_matrices(<Render> child, child_transform, local_projective, out_map)
+
+    if r.pass_focuses:
+        for child in r.pass_focuses:
+            if isinstance(child, Render):
+                _collect_projective_matrices(<Render> child, transform, local_projective, out_map)
+
+
+def get_projective_matrices(d):
+    """Returns (to_screen, child_to_screen) for a displayable inside a perspective Render, or None."""
+
+    global _projective_map
+    global _projective_map_built
+
+    if screen_render is None:
+        return None
+
+    if not _projective_map_built:
+        _projective_map = { }
+        _collect_projective_matrices(screen_render, IDENTITY, False, _projective_map)
+        _projective_map_built = True
+
+    return _projective_map.get(id(d))
+
+
+cdef bint has_mouse_target(Render r):
+    if r.modal:
+        return True
+    if r.focuses:
+        for d, arg, x, y, w, h, mx, my, mask in r.focuses:
+            if x is not None and x is not False and arg is not r.NO_MOUSE_FOCUS:
+                return True
+    for child, x, y, focus, main in r.children:
+        if focus and isinstance(child, Render) and has_mouse_target(<Render> child):
+            return True
+    if r.pass_focuses:
+        for child in r.pass_focuses:
+            if isinstance(child, Render) and has_mouse_target(<Render> child):
+                return True
+    return False
+
+
+cdef inline void _claim_3d_focus(list best, object candidate, double z_ndc, bint is_modal, bint has_depth):
+    # Equal depths keep the topmost target in draw order.
+    if (best[0] is None and not best[2]) or (has_depth and z_ndc < best[1] - 1e-5):
+        best[0] = candidate
+        best[1] = z_ndc
+        best[2] = is_modal
+
+
+cdef void _focus_at_point_3d(Render r, double sx, double sy, object screen, Matrix transform,
+        bint has_depth, object cull_face, float det_sign, list best, list occluders):
+
+    cdef double lx, ly, lz, cx, cy, cz
+    cdef bint has_local = False
+    cdef bint local_depth = has_depth
+    cdef bint opened_depth = False
+    cdef bint mask_is_mesh, auto_mesh
+    cdef list active_best = best
+    cdef object local_cull = cull_face
+    cdef float child_det = det_sign
+    cdef float mesh_det
+    cdef Matrix child_transform, mesh_transform, mask_transform
+    cdef Render mesh_root
+    cdef dict props = r.properties
+
+    if r.focus_screen is not None:
+        screen = r.focus_screen
+
+    if r.xclipping or r.yclipping:
+        if transform is IDENTITY:
+            lx = sx
+            ly = sy
+            lz = 0.0
+            has_local = True
+        else:
+            has_local = unproject_plane(transform, sx, sy, &lx, &ly, &lz)
+            if not has_local:
+                return
+
+        if r.xclipping and (lx < 0 or lx >= r.width):
+            return
+        if r.yclipping and (ly < 0 or ly >= r.height):
+            return
+
+    if props is not None:
+        if props.get("gltf_pass"):
+            return
+        if (not has_depth) and props.get("depth", False):
+            # A depth buffer cannot occlude UI in another buffer.
+            if not has_mouse_target(r):
+                return
+            local_depth = True
+            opened_depth = True
+            active_best = [ None, 2.0, False ]
+            occluders = [ ]
+        cf = props.get("cull_face", False)
+        if cf is not False:
+            local_cull = cf
+
+    if r.modal and has_depth:
+        # Resolve this window's own controls before comparing it to siblings.
+        active_best = [ None, 2.0, False ]
+
+    if (r.reverse is not None) and (r.reverse is not IDENTITY):
+        if r.matrix_kind == MATRIX_PROJECTION:
+            child_det = 1.0
+        elif determinant3(r.reverse) < 0.0:
+            child_det = -det_sign
+
+    # Intersect scenery only once the nearest candidate at this pixel is known.
+    # shortcut: alpha-masked scenery never occludes, as picking can't sample its texture; sample the mask at the hit to block clicks on solid parts.
+    if (local_depth and r.mesh is not None and r.mesh is not True
+            and hasattr(r.mesh, "ray_hit")
+            and not (props is not None and props.get("transparent", False))
+            and not (r.uniforms is not None and r.uniforms.get("u_material_gltf_alphamode", 0.0) == 1.0)):
+        mesh_transform = transform
+        if (r.reverse is not None) and (r.reverse is not IDENTITY):
+            mesh_transform = mesh_transform * r.reverse
+        eff_cull = resolve_gltf_cull_face(local_cull, props, child_det)
+        occluders.append((r, mesh_transform, eff_cull))
+
+    if r.pass_focuses:
+        for child in reversed(r.pass_focuses):
+            if isinstance(child, Render):
+                _focus_at_point_3d(<Render> child, sx, sy, screen, transform, local_depth, local_cull, det_sign, active_best, occluders)
+                if (not local_depth) and (active_best[0] is not None or active_best[2]):
+                    break
+
+    if local_depth or (active_best[0] is None and not active_best[2]):
+        for child, xo, yo, focus, main in reversed(r.children):
+            if not focus or not isinstance(child, Render):
+                continue
+
+            child_transform = transform
+            if xo or yo:
+                child_transform = child_transform * Matrix.coffset(xo, yo, 0)
+            if (r.reverse is not None) and (r.reverse is not IDENTITY):
+                child_transform = child_transform * r.reverse
+
+            _focus_at_point_3d(<Render> child, sx, sy, screen, child_transform, local_depth, local_cull, child_det, active_best, occluders)
+
+            if (not local_depth) and (active_best[0] is not None or active_best[2]):
+                break
+
+    if r.focuses and (local_depth or (active_best[0] is None and not active_best[2])):
+        for (d, arg, xo, yo, w, h, mx, my, mask) in reversed(r.focuses):
+            if xo is None or xo is False:
+                continue
+            if arg is r.NO_MOUSE_FOCUS:
+                continue
+
+            mask_is_mesh = isinstance(mask, Render) and render_has_mesh3(<Render> mask)
+            auto_mesh = (not mask_is_mesh) and (mask is None) and (mx is None) and (w <= 0) and (h <= 0) and render_has_mesh3(r)
+
+            if mask_is_mesh or auto_mesh:
+                mesh_root = <Render> mask if mask_is_mesh else r
+                mesh_transform = transform
+                mesh_det = det_sign
+                if mesh_root is not r:
+                    if mx or my:
+                        mesh_transform = mesh_transform * Matrix.coffset(mx, my, 0)
+                    if (r.reverse is not None) and (r.reverse is not IDENTITY):
+                        mesh_transform = mesh_transform * r.reverse
+                    mesh_det = child_det
+                hit_z = mesh_tree_ray_hit(mesh_root, mesh_transform, sx, sy, local_cull, mesh_det)
+                if hit_z is not None:
+                    _claim_3d_focus(active_best, (d, arg, screen), hit_z, False, local_depth)
+            else:
+                if not has_local:
+                    if transform is IDENTITY:
+                        lx = sx
+                        ly = sy
+                        lz = 0.0
+                        has_local = True
+                    else:
+                        has_local = unproject_plane(transform, sx, sy, &lx, &ly, &lz)
+                        if not has_local:
+                            continue
+
+                if mx is not None:
+                    if (r.reverse is not None) and (r.reverse is not IDENTITY):
+                        mask_transform = transform
+                        if mx or my:
+                            mask_transform = mask_transform * Matrix.coffset(mx, my, 0)
+                        mask_transform = mask_transform * r.reverse
+                        if not unproject_plane(mask_transform, sx, sy, &cx, &cy, &cz):
+                            continue
+                    else:
+                        cx = lx - mx
+                        cy = ly - my
+                        cz = lz
+
+                    if isinstance(mask, Render):
+                        if cx < 0 or cx >= mask.width:
+                            continue
+                        if cy < 0 or cy >= mask.height:
+                            continue
+                        if mask.is_pixel_opaque(cx, cy):
+                            _claim_3d_focus(active_best, (d, arg, screen), cz, False, local_depth)
+                    else:
+                        mask_result = mask(cx, cy)
+                        if callable(mask_result):
+                            mask_result = mask_result(cx, cy, w - mx, h - my)
+                        if mask_result:
+                            _claim_3d_focus(active_best, (d, arg, screen), cz, False, local_depth)
+                elif xo <= lx < xo + w and yo <= ly < yo + h:
+                    _claim_3d_focus(active_best, (d, arg, screen), lz, False, local_depth)
+
+            if (not local_depth) and (active_best[0] is not None or active_best[2]):
+                break
+
+    if (active_best[0] is None) and (not active_best[2]) and r.modal:
+        if not has_local:
+            if transform is IDENTITY:
+                lx = sx
+                ly = sy
+                lz = 0.0
+                has_local = True
+            else:
+                has_local = unproject_plane(transform, sx, sy, &lx, &ly, &lz)
+
+        if has_local:
+            mw = r.width
+            mh = r.height
+            if r.modal == "default":
+                mw = None
+                mh = None
+            if renpy.display.layout.check_modal(r.modal, None, lx, ly, mw, mh):
+                _claim_3d_focus(active_best, None, lz, True, local_depth)
+
+    if opened_depth and (active_best[0] is not None or active_best[2]):
+        for owner, mesh_transform, face in occluders:
+            cached = mesh_hits.get(id(owner))
+            if cached is not None and cached[1] == face and cached[0] == mesh_transform:
+                # A nearest hit before the bound exists exactly when an any-hit query would find one.
+                if cached[2] is not None and cached[2] < active_best[1] - 1e-5:
+                    return
+            elif (<Render> owner).mesh.ray_hit(mesh_transform, sx, sy, face, active_best[1] - 1e-5, True) is not None:
+                return
+        _claim_3d_focus(best, active_best[0], active_best[1], active_best[2], False)
+    elif r.modal and has_depth and active_best[1] < 2.0:
+        _claim_3d_focus(best, active_best[0], active_best[1], active_best[2], True)
+
 
 cdef class Render:
 
@@ -1286,6 +1822,11 @@ cdef class Render:
             The list of focuses to add to.
         """
 
+        cdef bint projective = is_projective_matrix(transform)
+        cdef bint mask_is_mesh, auto_mesh
+        cdef Render mesh_root
+        cdef Matrix mesh_transform
+
         if self.focus_screen is not None:
             screen = self.focus_screen
 
@@ -1293,13 +1834,20 @@ cdef class Render:
 
             if self.modal == "window":
 
-                x1, y1 = transform.transform(0, 0)
-                x2, y2 = transform.transform(self.width, self.height)
+                if projective:
+                    bounds = project_rect_bounds(transform, 0, 0, self.width, self.height)
+                    if bounds is not None:
+                        minx, miny, maxx, maxy = bounds
+                    else:
+                        minx = maxx = miny = maxy = 0
+                else:
+                    x1, y1 = transform.transform(0, 0)
+                    x2, y2 = transform.transform(self.width, self.height)
 
-                minx = min(x1, x2)
-                maxx = max(x1, x2)
-                miny = min(y1, y2)
-                maxy = max(y1, y2)
+                    minx = min(x1, x2)
+                    maxx = max(x1, x2)
+                    miny = min(y1, y2)
+                    maxy = max(y1, y2)
 
                 new_focuses = [ ]
 
@@ -1326,13 +1874,35 @@ cdef class Render:
                     focuses.append(renpy.display.focus.Focus(d, arg, xo, yo, w, h, screen))
                     continue
 
-                x1, y1 = transform.transform(xo, yo)
-                x2, y2 = transform.transform(xo + w, yo + h)
+                mask_is_mesh = isinstance(mask, Render) and render_has_mesh3(<Render> mask)
+                auto_mesh = (not mask_is_mesh) and (mask is None) and (mx is None) and (w <= 0) and (h <= 0) and render_has_mesh3(self)
 
-                minx = min(x1, x2)
-                maxx = max(x1, x2)
-                miny = min(y1, y2)
-                maxy = max(y1, y2)
+                if mask_is_mesh or auto_mesh:
+                    mesh_root = <Render> mask if mask_is_mesh else self
+                    mesh_transform = transform
+                    if mesh_root is not self:
+                        if mx or my:
+                            mesh_transform = mesh_transform * Matrix.coffset(mx, my, 0)
+                        if (self.reverse is not None) and (self.reverse is not IDENTITY):
+                            mesh_transform = mesh_transform * self.reverse
+                    acc = [ 0.0, 0.0, 0.0, 0.0, 0 ]
+                    collect_mesh3_screen_bounds(mesh_root, mesh_transform, acc)
+                    if acc[4] == 0:
+                        continue
+                    minx, miny, maxx, maxy = acc[0], acc[1], acc[2], acc[3]
+                elif projective:
+                    bounds = project_rect_bounds(transform, xo, yo, xo + w, yo + h)
+                    if bounds is None:
+                        continue
+                    minx, miny, maxx, maxy = bounds
+                else:
+                    x1, y1 = transform.transform(xo, yo)
+                    x2, y2 = transform.transform(xo + w, yo + h)
+
+                    minx = min(x1, x2)
+                    maxx = max(x1, x2)
+                    miny = min(y1, y2)
+                    maxy = max(y1, y2)
 
                 minx = max(minx, cminx)
                 maxx = min(maxx, cmaxx)
@@ -1348,20 +1918,32 @@ cdef class Render:
 
         if self.xclipping or self.yclipping:
 
-            x1, y1 = transform.transform(0, 0)
-            x2, y2 = transform.transform(self.width, self.height)
+            if projective:
+                bounds = project_rect_bounds(transform, 0, 0, self.width, self.height)
+                if bounds is None:
+                    return
+                minx, miny, maxx, maxy = bounds
+                if self.xclipping:
+                    cminx = max(minx, cminx)
+                    cmaxx = min(maxx, cmaxx)
+                if self.yclipping:
+                    cminy = max(miny, cminy)
+                    cmaxy = min(maxy, cmaxy)
+            else:
+                x1, y1 = transform.transform(0, 0)
+                x2, y2 = transform.transform(self.width, self.height)
 
-            if self.xclipping:
-                minx = min(x1, x2)
-                maxx = max(x1, x2)
-                cminx = max(minx, cminx)
-                cmaxx = min(maxx, cmaxx)
+                if self.xclipping:
+                    minx = min(x1, x2)
+                    maxx = max(x1, x2)
+                    cminx = max(minx, cminx)
+                    cmaxx = min(maxx, cmaxx)
 
-            if self.yclipping:
-                miny = min(y1, y2)
-                maxy = max(y1, y2)
-                cminy = max(miny, cminy)
-                cmaxy = min(maxy, cmaxy)
+                if self.yclipping:
+                    miny = min(y1, y2)
+                    maxy = max(y1, y2)
+                    cminy = max(miny, cminy)
+                    cmaxy = min(maxy, cmaxy)
 
         for child, cx, cy, focus, main in self.children:
 
@@ -1400,6 +1982,17 @@ cdef class Render:
         if self.yclipping:
             if y < 0 or y >= self.height:
                 return None
+
+        if is_projective_render(self):
+            best = [ None, 2.0, False ]
+            mesh_hits.clear()
+            _focus_at_point_3d(self, x, y, screen, IDENTITY, False, None, 1.0, best, None)
+            mesh_hits.clear()
+            if best[0] is not None:
+                return best[0]
+            if best[2]:
+                return Modal
+            return None
 
         if self.forward and self.forward.is_2d_null():
             return None
