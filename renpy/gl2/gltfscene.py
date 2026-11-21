@@ -312,6 +312,13 @@ class Accessors:
         return self.read(accessor_index, kind, geometry=True, flat=flat)
 
 
+def mesh_morph_count(mesh):
+    counts = {len(p.get("targets", [])) for p in mesh.get("primitives", [])}
+    if len(counts) != 1:
+        raise ValueError("A mesh's primitives must have the same morph target count.")
+    return counts.pop()
+
+
 def morph_weights(value, count=None):
     if not isinstance(value, (list, tuple)) or (count is not None and len(value) != count):
         raise ValueError("Morph weights must match the mesh's target count.")
@@ -416,7 +423,8 @@ class DeformPrimitive:
         uv0 = stream("TEXCOORD_0", "VEC2", (0, 0), True)
         uv1 = stream("TEXCOORD_1", "VEC2", (0, 0), True)
         color_index = attributes.get("COLOR_0")
-        color_kind = reader.document["accessors"][color_index]["type"] if color_index is not None else "VEC4"
+        accessors = reader.document.get("accessors", [])
+        color_kind = accessors[index(color_index, accessors, "color accessor")]["type"] if color_index is not None else "VEC4"
         if color_kind not in ("VEC3", "VEC4"):
             raise ValueError("Vertex color requires VEC3 or VEC4.")
         colors = stream("COLOR_0", color_kind, (1, 1, 1, 1), True)
@@ -554,10 +562,7 @@ class Asset:
             mesh_index = index(node["mesh"], self.meshes, "mesh")
             mesh = self.meshes[mesh_index]
             primitives = mesh.get("primitives", [])
-            counts = {len(p.get("targets", [])) for p in primitives}
-            if len(counts) != 1:
-                raise ValueError("A mesh's primitives must have the same morph target count.")
-            count = next(iter(counts))
+            count = mesh_morph_count(mesh)
             self.morph_defaults[node_index] = morph_weights(node.get("weights", mesh.get("weights", (0,) * count)), count)
             for primitive_index, primitive in enumerate(primitives):
                 key = mesh_index, primitive_index
@@ -626,7 +631,8 @@ class Asset:
                 values = reader.read(sampler.get("output"), "SCALAR" if path == "weights" else
                     "VEC4" if path == "rotation" else "VEC3", path == "rotation")
                 if path == "weights":
-                    count = len(self.morph_defaults.get(node_index, ()))
+                    mesh_index = index(self.nodes[node_index].get("mesh"), self.meshes, "morph animation mesh")
+                    count = mesh_morph_count(self.meshes[mesh_index])
                     if not count or len(values) % count:
                         raise ValueError("A morph animation requires matching mesh target weights.")
                     values = tuple(tuple(row[0] for row in values[i:i + count]) for i in range(0, len(values), count))
@@ -706,7 +712,8 @@ class Asset:
         time = time % duration if loop and duration else min(max(time, 0.0), duration)
         changes = {}
         for channel in clip["channels"]:
-            changes.setdefault(channel[0], {})[channel[1]] = sample(channel, time)
+            if channel[0] in self.active:
+                changes.setdefault(channel[0], {})[channel[1]] = sample(channel, time)
         return changes
 
     def pose(self, overrides, animation, time, loop, zoom, blend=None, include_weights=False):

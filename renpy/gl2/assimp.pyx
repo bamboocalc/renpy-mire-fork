@@ -170,6 +170,14 @@ MATERIAL_TEXTURE_EXTENSIONS = {
 }
 
 
+def _local_file(filename):
+    """Assimp passes glTF URIs to the loader without percent-decoding them."""
+    if renpy.loader.loadable(filename):
+        return filename
+    from urllib.parse import unquote
+    return unquote(filename)
+
+
 def _material_document(filename):
     """Read only the JSON chunk of a GLB; geometry and images remain Assimp's responsibility."""
     with renpy.loader.load(filename) as f:
@@ -526,7 +534,8 @@ def _deform_geometry(source, weights, matrices):
     cdef const float[::1] morph = array.array("f", weights)
     cdef const float[::1] bones = array.array("f", (v for matrix in matrices for v in renpy.gl2.gltf.matrix_values(matrix)))
     cdef bint skin = bool(matrices)
-    if skin and joints.shape[0] and max(source.joint_indices) >= len(matrices):
+    # The importer records the largest index; rescanning it per pose costs milliseconds on large skins.
+    if skin and source.max_joint_index >= len(matrices):
         raise ValueError("Vertex joint index exceeds the skin's joint count.")
     cdef int count = source.count, stride = renpy.gl2.gl2mesh.GLTF_T_LAYOUT.stride
     cdef int target_count = source.target_count, vertex, target, component, offset, at, bone
@@ -726,6 +735,9 @@ cdef class Loader:
     cdef bint material
     cdef dict document
 
+    # One buffer reader per import, so extension images in a shared buffer read it once.
+    cdef object accessors
+
     cdef public set uniforms
     "A list of the uniforms being set by materials."
 
@@ -798,7 +810,8 @@ cdef class Loader:
         materials = self.document.get("materials", [ ])
         names = [m.get("name") for m in materials]
         self.import_data = None
-        if geometry or not (all(type(n) is str and n for n in names) and len(set(names)) == len(names)):
+        # aiString holds 1023 bytes, so longer names come back truncated.
+        if geometry or not (all(type(n) is str and n and len(n.encode()) < 1024 for n in names) and len(set(names)) == len(names)):
             document = renpy.gl2.gltfscene.material_import_document(self.document) if geometry else dict(self.document)
             if materials:
                 names = [str(i) for i in range(len(materials))]
@@ -853,6 +866,7 @@ cdef class Loader:
             self.model_data = None
             self.uniforms = set()
             self.document = { }
+            self.accessors = None
 
             aiReleaseImport(self.scene)
             self.scene = NULL
@@ -922,7 +936,7 @@ cdef class Loader:
                 d = loader.model_data.embedded_textures[path]
 
             else:
-                d = renpy.easy.displayable(loader.dirname + "/" + path)
+                d = renpy.easy.displayable(_local_file(loader.dirname + "/" + path))
 
             rv = unoptimized_texture(d, premultiply=not self.material_alpha)
 
@@ -961,7 +975,9 @@ cdef class Loader:
             else:
                 views = self.document.get("bufferViews", [])
                 view = views[renpy.gl2.gltfscene.index(image.get("bufferView"), views, "image bufferView")]
-                buffer = renpy.gl2.gltfscene.Accessors(self.document, self.filename).buffer(view.get("buffer"))
+                if self.accessors is None:
+                    self.accessors = renpy.gl2.gltfscene.Accessors(self.document, self.filename)
+                buffer = self.accessors.buffer(view.get("buffer"))
                 start, length = view.get("byteOffset", 0), view.get("byteLength")
                 if type(start) is not int or type(length) is not int or start < 0 or length <= 0 or start + length > len(buffer):
                     raise ValueError("Material image exceeds its buffer view.")
@@ -1664,6 +1680,8 @@ class GLTFModel(Displayable):
         self.filename = filename
         self.shaders = shaders
         self.tangents = tangents or "renpy.gltf.pbr" in shaders
+        if not 0 < zoom < float("inf"):
+            raise ValueError(f"GLTFModel zoom must be a positive finite number, not {zoom!r}.")
         self.zoom = zoom
         self.report = report
         self.frustum_cull = frustum_cull
@@ -1747,9 +1765,6 @@ class GLTFModel(Displayable):
             with cache_lock:
                 cache[key] = model_data
 
-        for d in self._prepared(model_data)[3]:
-            renpy.display.im.cache.preload_image(d)
-
         return model_data
 
     def _materials(self, model_data):
@@ -1794,6 +1809,8 @@ class GLTFModel(Displayable):
         if not self._duplicatable:
             return self
         rv = self._copy(args)
+        # A new show starts its own playback, even when the image's prototype was rendered directly.
+        rv._animation_elapsed = 0.0
         rv.after_setstate()
         rv._unique()
         return rv
@@ -1810,6 +1827,9 @@ class GLTFModel(Displayable):
                 textures[name] = renpy.display.im.UnoptimizedTexture(
                     overrides[name], premultiply=False, srgb=texture.srgb,
                     mipmap=texture.mipmap, texture_sampler=texture.texture_sampler)
+        # Names the source material lacks, such as custom samplers, have no root binding to fall back on.
+        for name, texture in (material_textures or {}).items():
+            textures.setdefault(name, texture)
         return textures
 
     def _pose(self, model_data, st, redraw_target=None, include_weights=False):
@@ -2037,6 +2057,9 @@ class GLTFCamera(Displayable):
     the offered rectangle. Recreate the camera to change saved selection.
     """
 
+    # The centered viewport's offset from the last render, for event positions.
+    offset = (0, 0)
+
     camera = None
     node = None
 
@@ -2097,14 +2120,15 @@ class GLTFCamera(Displayable):
         viewport.add_property("gltf_camera_viewport", True)
         viewport.blit(projected, (0, 0))
         rv = Render(width, height)
-        rv.blit(viewport, ((width - size[0]) / 2, (height - size[1]) / 2))
+        self.offset = ((width - size[0]) / 2, (height - size[1]) / 2)
+        rv.blit(viewport, self.offset)
         return rv
 
     def visit(self):
         return [self.child] if self.child is self.source else [self.child, self.source]
 
     def event(self, ev, x, y, st):
-        return self.child.event(ev, x, y, st)
+        return self.child.event(ev, x - self.offset[0], y - self.offset[1], st)
 
     def _handles_event(self, event):
         return self.child._handles_event(event)
@@ -2707,10 +2731,9 @@ def finish_predict():
     global predicted
     global new_predicted
 
-    if new_predicted != predicted:
-        predicted = new_predicted
-        new_predicted = set()
-
+    changed = new_predicted != predicted
+    predicted, new_predicted = new_predicted, set()
+    if changed:
         renpy.display.im.cache.start_prediction()
 
 
@@ -2735,7 +2758,9 @@ def preload():
             del cache[i]
 
     for i in predicted:
-        i.load()
+        # Instances sharing an import differ in texture overrides, so a cache hit still preloads its own.
+        for d in i._prepared(i.load())[3]:
+            renpy.display.im.cache.preload_image(d)
 
 
 cdef public SDL_IOStream *assimp_load(const char *filename) nogil:
@@ -2745,14 +2770,15 @@ cdef public SDL_IOStream *assimp_load(const char *filename) nogil:
 
     with gil:
 
-        fn = filename.decode()
+        # A Python exception can't cross this C callback, so undecodable names fail as missing files.
+        fn = filename.decode("utf-8", "replace")
 
         try:
             if loader.import_data is not None and fn.replace("\\", "/") == loader.filename.replace("\\", "/"):
                 import io
                 f = io.BytesIO(loader.import_data)
             else:
-                f = renpy.loader.load(fn)
+                f = renpy.loader.load(_local_file(fn))
             return open_io(f).take()
         except Exception as e:
             renpy.display.log.write("Unable to load Assimp file %r: %s", fn, e)

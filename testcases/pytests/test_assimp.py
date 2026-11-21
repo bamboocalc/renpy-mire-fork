@@ -90,8 +90,9 @@ def test_inactive_models_keep_only_the_most_recent_that_fit(model_cache, mocker,
     assert list(model_cache) == [models[index] for index in survivors]
 
 
-def test_zero_budget_preserves_existing_eviction_policy(model_cache):
+def test_zero_budget_preserves_existing_eviction_policy(model_cache, mocker):
     """With retention disabled, inactive models are discarded and predicted models remain."""
+    mocker.patch.object(assimp.GLTFModel, "_prepared", return_value=({}, {}, {}, []))
     old = object()
     active = assimp.GLTFModel("active.glb", shader="renpy.texture")
     model_cache[old] = SimpleNamespace(memory_size=1)
@@ -122,9 +123,48 @@ def test_predicted_models_do_not_consume_the_inactive_budget(model_cache, mocker
     model_cache[inactive] = SimpleNamespace(memory_size=3 * 1024 * 1024)
     model_cache[active.cache_key] = SimpleNamespace(memory_size=8 * 1024 * 1024)
     assimp.predicted.add(active)
+    mocker.patch.object(assimp.GLTFModel, "_prepared", return_value=({}, {}, {}, []))
     mocker.patch.object(renpy.config, "gltf_model_cache_size_mb", 4)
     assimp.preload()
     assert set(model_cache) == {inactive, active.cache_key}
+
+
+def test_instances_sharing_an_import_each_preload_their_textures(model_cache, mocker):
+    """The second instance's cache hit still queues its own override, though the first instance imported."""
+    mesh_info = assimp.MeshInfo.__new__(assimp.MeshInfo)
+    mesh_info.texture_uniforms, mesh_info.material_index = {}, 0
+    loader = SimpleNamespace(load=mocker.Mock(side_effect=lambda data, *args: setattr(data, "mesh_info", [mesh_info])))
+    mocker.patch.object(assimp, "loader", loader)
+    preload = mocker.patch.object(renpy.display.im.cache, "preload_image")
+    models = [assimp.GLTFModel("room.glb", shader="renpy.texture", u_tex_diffuse=renpy.display.im.Null(color))
+        for color in ("#f00", "#0f0")]
+    assimp.predicted.update(models)
+    assimp.preload()
+    loader.load.assert_called_once()
+    assert {call.args[0] for call in preload.call_args_list} == {m.texture_uniforms["u_tex_diffuse"] for m in models}
+
+
+def test_duplicate_of_a_rendered_prototype_starts_its_clip_at_zero():
+    """An image's prototype rendered for three seconds does not start later shows three seconds in."""
+    prototype = assimp.GLTFModel("room.glb", scene=True, animation="Slide")
+    prototype._animation_elapsed = 3.0
+    shown = prototype._duplicate(None)
+    assert shown is not prototype
+    assert (shown._animation_resume, shown._animation_rebase) == (0.0, True)
+
+
+def test_repeated_prediction_then_departure_releases_model(model_cache, mocker):
+    """An identical prediction pass must still discard its accumulator before the next room."""
+    model = assimp.GLTFModel("departed.glb", shader="renpy.texture")
+    model_cache[model.cache_key] = SimpleNamespace(memory_size=1)
+    mocker.patch.object(assimp, "new_predicted", set())
+    mocker.patch.object(renpy.display.im.cache, "start_prediction")
+    for _ in range(2):
+        assimp.new_predicted.add(model)
+        assimp.finish_predict()
+    assimp.finish_predict()
+    assimp.preload()
+    assert model.cache_key not in model_cache
 
 
 def test_explicit_memory_clear_removes_predicted_and_retained_models(model_cache, mocker):
@@ -406,6 +446,18 @@ def test_import_defaults_missing_alpha_settings(material_model, tmp_path):
     assert data.mesh_info[0].uniforms["u_material_gltf_alphacutoff"] == 0.5
 
 
+def test_native_texture_uri_is_percent_decoded(material_model, tmp_path):
+    """Assimp reports image URIs undecoded, so the texture must load from the decoded file name."""
+    document = json.loads(Path(material_model("mask").filename).read_text(encoding="utf-8"))
+    (tmp_path / "base color.png").write_bytes(base64.b64decode(document["images"][0]["uri"].partition(",")[2]))
+    document["images"][0]["uri"] = "base%20color.png"
+    filename = tmp_path / "encoded-image.gltf"
+    filename.write_text(json.dumps(document), encoding="utf-8")
+    data = assimp.GLTFModel(filename.as_posix(), shader="renpy.texture", material_alpha=True).load()
+    texture = data.mesh_info[0].texture_uniforms["u_tex_base_color"]
+    assert texture.image.filename == (tmp_path / "base color.png").as_posix()
+
+
 def test_old_saved_model_preserves_legacy_materials():
     """An old save has no material_alpha attribute and must retain its original texture and drawing behavior."""
     model = assimp.GLTFModel("old.glb", shader="renpy.texture")
@@ -474,7 +526,7 @@ def test_standard_material_defaults_without_authored_materials(standard_model):
     assert all(mi.uniforms["u_color_base"] == (1, 1, 1, 1) for mi in data.mesh_info)
 
 
-@pytest.mark.parametrize("names", ["unique", "missing", "duplicate"])
+@pytest.mark.parametrize("names", ["unique", "missing", "duplicate", "long", "long_utf8"])
 @pytest.mark.parametrize("glb", [False, True], ids=["gltf", "glb"])
 def test_standard_materials_survive_assimp_renumbering(standard_model, model_cache, glb, names):
     """Assimp numbers only referenced materials, by first use; each mesh must still bind its own document material."""
@@ -486,15 +538,46 @@ def test_standard_materials_survive_assimp_renumbering(standard_model, model_cac
         document["materials"] = [{"name": "Unused"}] + document["materials"][::-1]
         for mesh in document["meshes"]:
             mesh["primitives"][0]["material"] = count - mesh["primitives"][0]["material"]
-        for material in document["materials"]:
+        for i, material in enumerate(document["materials"]):
             if names == "missing":
                 del material["name"]
             elif names == "duplicate":
                 material["name"] = "Paint"
+            elif names == "long":
+                material["name"] = f"{i:02d}" + "x" * 1050
+            elif names == "long_utf8":
+                material["name"] = f"{i:02d}" + "é" * 600
 
     data = standard_model(edit, glb=glb).load()
     assert [(mi.uniforms, set(mi.texture_uniforms)) for mi in data.mesh_info] == expected
     assert [mi.material_index for mi in data.mesh_info] == list(range(12, 0, -1))
+
+
+def test_extension_images_in_one_buffer_share_a_reader(standard_model, mocker):
+    """Each embedded extension map used to construct its own reader and reread the shared binary buffer."""
+    def edit(document):
+        png = base64.b64decode(document["images"][0]["uri"].partition(",")[2])
+        buffer = document["buffers"][0]
+        data = base64.b64decode(buffer["uri"].partition(",")[2])
+        data += b"\0" * (-len(data) % 4)
+        for _ in range(2):
+            document["bufferViews"].append({"buffer": 0, "byteOffset": len(data), "byteLength": len(png)})
+            data += png + b"\0" * (-len(png) % 4)
+            document["images"].append({"bufferView": len(document["bufferViews"]) - 1, "mimeType": "image/png"})
+            document["textures"].append({"source": len(document["images"]) - 1})
+        buffer["uri"] = "data:application/octet-stream;base64," + base64.b64encode(data).decode()
+        buffer["byteLength"] = len(data)
+        count = len(document["textures"])
+        document["extensionsUsed"].append("KHR_materials_specular")
+        document["materials"][0]["extensions"] = {"KHR_materials_specular": {
+            "specularTexture": {"index": count - 2}, "specularColorTexture": {"index": count - 1}}}
+
+    readers = mocker.spy(renpy.gl2.gltfscene, "Accessors")
+    data = standard_model(edit, glb=True).load()
+    textures = data.mesh_info[0].texture_uniforms
+    assert all(isinstance(textures[name].image, renpy.display.im.UnoptimizedTexture)
+        for name in ("u_tex_specular", "u_tex_specular_color"))
+    assert readers.call_count == 1
 
 
 def test_layered_material_factors_and_independent_texture_bindings(standard_model):
@@ -883,6 +966,16 @@ def test_native_scene_import_keeps_named_graph_and_animation(scene_model, transp
     assert len(model.load().mesh_info) == 2
 
 
+def test_native_import_decodes_percent_encoded_buffer_uri(scene_model, tmp_path):
+    """Assimp requests external buffers by their undecoded URI; the animation reader already decodes it."""
+    model = scene_model(transport="external")
+    document = tmp_path / "scene.gltf"
+    document.write_text(document.read_text(encoding="utf-8").replace('"scene.bin"', '"scene%20data.bin"'), encoding="utf-8")
+    (tmp_path / "scene.bin").rename(tmp_path / "scene data.bin")
+    assert len(model.load().mesh_info) == 2
+    assert model.scene_info()["animations"][0]["duration"] == 2
+
+
 def test_scene_instances_share_import_without_sharing_controls(scene_model):
     """A different pose or paint choice reuses geometry; static imports retain a separate compatible cache entry."""
     first = scene_model(animation="Slide", animation_time=0)
@@ -904,6 +997,17 @@ def test_scene_material_overrides_use_document_indices(scene_model):
     door = next(blit.mesh_info for blit in data.blit_info if blit.node_index == 1)
     assert door.material_index == 1
     assert set(model._materials(data)) == {door.material_index}
+
+
+def test_material_override_binds_custom_sampler(scene_model):
+    """A sampler the source material lacks must still reach the meshes using the overridden material."""
+    model = scene_model(material_overrides={"DoorPaint": {"u_tex_custom": "custom.png"}})
+    data = model.load()
+    door = next(blit.mesh_info for blit in data.blit_info if blit.node_index == 1)
+    _materials, mesh_textures, root_textures, textures = model._prepared(data)
+    assert mesh_textures[door]["u_tex_custom"].image.filename == "custom.png"
+    assert all("u_tex_custom" not in values for mi, values in mesh_textures.items() if mi is not door)
+    assert "u_tex_custom" not in root_textures and mesh_textures[door]["u_tex_custom"] in textures
 
 
 def test_scene_import_keeps_multiple_roots_and_multi_primitive_nodes(scene_model):
@@ -1004,6 +1108,43 @@ def test_morph_precedes_skin_and_preserves_earlier_meshes(deform_model):
     assert [p[0] for p in unskinned.get_points()] == pytest.approx([0, .8, .8, 0])
 
 
+def test_deformation_rejects_a_skin_missing_joint_matrices(deform_model):
+    """The pose check uses the importer's recorded joint maximum rather than rescanning every influence."""
+    source = deform_model().load().mesh_info[0].deformation
+    assert source.max_joint_index == 1
+    with pytest.raises(ValueError, match="joint index"):
+        assimp._deform_geometry(source, (0, 0), (renpy.display.render.IDENTITY,))
+
+
+def test_deformation_names_an_invalid_color_accessor(deform_model):
+    """An out-of-range COLOR_0 reports the glTF accessor instead of an IndexError."""
+    def broken(doc):
+        doc["meshes"][0]["primitives"][0]["attributes"]["COLOR_0"] = 99
+
+    with pytest.raises(ValueError, match="color accessor"):
+        deform_model(broken).load()
+
+
+@pytest.mark.parametrize("zoom", [0, -1.0, math.nan, math.inf])
+def test_model_rejects_unusable_zoom(zoom):
+    """A zero, negative or non-finite zoom would otherwise turn every vertex into NaN or a point."""
+    with pytest.raises(ValueError, match="zoom"):
+        assimp.GLTFModel("room.glb", shader="renpy.texture", zoom=zoom)
+
+
+def test_inactive_scene_morph_animation(deform_model):
+    """A clip may animate a mesh in another scene without moving the active scene's geometry."""
+    def other_scene(doc):
+        node = len(doc["nodes"])
+        doc["nodes"].append({"mesh": 0})
+        doc["scenes"].append({"nodes": [node]})
+        doc["animations"][1]["channels"][0]["target"]["node"] = node
+
+    asset = deform_model(other_scene).load().asset
+    assert asset.clip_changes("Expand", 1.0, False) == {}
+    assert asset.info()["animations"][1]["duration"] > 0
+
+
 def test_clip_blend_restores_missing_channels_from_bind_pose(deform_model):
     """A morph-only secondary clip blends joint translation back toward bind pose rather than leaving the primary joint fully bent."""
     asset = deform_model().load().asset
@@ -1086,6 +1227,22 @@ def test_camera_keeps_a_source_that_is_not_drawn_predicted(deform_model, mocker)
     mocker.patch.object(renpy.display.render, "render", return_value=Render(1, 1))
     camera.render(400, 300, 0, 0)
     assert source in assimp.new_predicted
+
+
+def test_camera_letterbox_offsets_events(deform_model, mocker):
+    """A 4:3 camera centered in 400x200 must give its child events in the child's own coordinates."""
+    seen = []
+
+    class Child(renpy.display.layout.Null):
+        def event(self, ev, x, y, st):
+            seen.append((x, y))
+
+    camera = assimp.GLTFCamera(deform_model(), Child())
+    mocker.patch.object(assimp, "new_predicted", set())
+    mocker.patch.object(renpy.display.render, "render", return_value=Render(1, 1))
+    camera.render(400, 200, 0, 0)
+    camera.event(None, 200, 100, 0)
+    assert seen == [pytest.approx((400 / 3, 100), abs=1)]
 
 
 def test_scene_predicts_environment_and_shadow_passes_without_inherited_parts(mocker):
