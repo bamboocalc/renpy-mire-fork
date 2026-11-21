@@ -69,7 +69,7 @@ cdef GLenum MAX_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FF
 # shortcut: KTX2 formats by OpenGL format, BC7 only for desktop GPUs; add ETC2 or ASTC rows when a mobile build needs them.
 COMPRESSED_FORMATS = {
     145 : 0x8E8C, # VK_FORMAT_BC7_UNORM_BLOCK, GL_COMPRESSED_RGBA_BPTC_UNORM
-    146 : 0x8E8C, # VK_FORMAT_BC7_SRGB_BLOCK, sampled without sRGB decoding, like PNG files.
+    146 : 0x8E8C, # VK_FORMAT_BC7_SRGB_BLOCK; the srgb property, not the file, picks sRGB decoding, like PNG files.
 }
 
 # Texture swizzle parameters (GL 3.3 / GLES 3.0).
@@ -108,6 +108,7 @@ cdef class TextureLoader:
         self.free_list = [ ]
         self.total_texture_size = 0
         self.texture_load_queue = weakref.WeakSet()
+        self.generation += 1
 
         self.max_anisotropy = 1.0
         glGetFloatv(MAX_TEXTURE_MAX_ANISOTROPY_EXT, &self.max_anisotropy)
@@ -339,6 +340,7 @@ cdef class GLTexture(GL2Model):
         # The number of the OpenGL texture this texture object
         # represents.
         self.number = 0
+        self.generation = loader.generation
 
         # True if the texture has been loaded into OpenGL, False otherwise.
         self.loaded = False
@@ -519,6 +521,7 @@ cdef class GLTexture(GL2Model):
                 self.default_min_filter = self.min_filter
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, self.min_filter)
             uploaded = image.get_texture_size(self.has_mipmaps())
+            self.properties["hdr_image"] = True
         self.properties["compressed_size"] = uploaded
         self.loader.total_texture_size += uploaded
 
@@ -1060,17 +1063,21 @@ cdef class GLTexture(GL2Model):
         Adds a mipmap to this texture, if it doesn't exist.
         """
 
-        # Compressed textures can't generate mipmaps; they keep the levels from their file.
-        if self.properties["mipmap"] or ("compressed_size" in self.properties):
+        hdr_image = self.properties.get("hdr_image", False)
+
+        # KTX2 textures can't generate mipmaps; they keep the levels from their file.
+        if self.properties["mipmap"] or ("compressed_size" in self.properties and not hdr_image):
             return
 
         self.properties["mipmap"] = True
-        texture_size = (self.texture_width * self.texture_height * 8 if self.properties.get("hdr", False)
+        texture_size = (self.texture_width * self.texture_height * 8 if self.properties.get("hdr", False) or hdr_image
             else self.width * self.height * 4)
         extra_size = int(texture_size * .34)
         self.loader.total_texture_size += extra_size
         if "allocated_size" in self.properties:
             self.properties["allocated_size"] += extra_size
+        elif hdr_image:
+            self.properties["compressed_size"] += extra_size
 
         # This leaves the texture selected.
         self.mipmap_texture(self.number, self.width, self.height, self.properties)
@@ -1081,7 +1088,8 @@ cdef class GLTexture(GL2Model):
 
     def __del__(self):
         try:
-            if self.loaded or self.uploading:
+            # A texture from before a context reset has no number or size left to release.
+            if (self.loaded or self.uploading) and self.generation == self.loader.generation:
                 self.loader.free_list.append(self.number)
 
                 if "compressed_size" in self.properties:
@@ -1105,6 +1113,11 @@ cdef class GLTexture(GL2Model):
         # Render targets are loaded, and have no surface.
         if self.loaded:
             return
+
+        if self.generation != self.loader.generation:
+            # A texture made before a context reset restarts any partial upload under a current number.
+            self.generation = self.loader.generation
+            self.uploading = False
 
         if self.properties.get("srgb", False) and not self.loader.srgb_textures:
             raise RuntimeError("sRGB textures require OpenGL 2.1, GL_EXT_texture_sRGB, or OpenGL ES 3.0.")

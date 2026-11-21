@@ -1726,8 +1726,9 @@ Showing Images
     ``VK_FORMAT_BC7_SRGB_BLOCK``) when the GPU reports
     ``GL_ARB_texture_compression_bptc`` or ``GL_EXT_texture_compression_bptc``.
     Otherwise, or when the KTX2 file is larger than the GPU allows, it loads
-    the image file. Colors are sampled without sRGB decoding, as image files
-    are.
+    the image file. The file's UNORM or SRGB format doesn't change sampling;
+    as with image files, colors are decoded from sRGB only when the texture
+    uses sRGB storage, as GLTF color maps do.
 
     The KTX2 file must be 2D, with one face, no array layers, and no
     supercompression. It should contain every mipmap level, since Ren'Py

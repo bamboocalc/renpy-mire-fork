@@ -136,3 +136,32 @@ testsuite texture_upload:
         run Jump("texture_upload_prediction_fixture")
         pause 0.01 until eval _upload_prediction_done timeout 10.0
         assert eval _upload_prediction_done
+
+
+init python:
+
+    def texture_reset__make(color):
+        """Loads a small opaque texture through the fast upload program."""
+        import renpy.pygame as pygame
+        surface = pygame.Surface((64, 64), pygame.SRCALPHA, 32)
+        surface.fill(color)
+        texture = renpy.display.draw.load_texture(surface)
+        texture.load()
+        return texture
+
+testsuite texture_context_reset:
+
+    testcase survivors_release_nothing_after_reset:
+        description "A texture and upload program from before a GL context reset free nothing that the new context reuses."
+
+        $ _reset_old = texture_reset__make((255, 0, 0, 255))
+        $ renpy.display_reset()
+        pause 0.2
+        $ _reset_new = texture_reset__make((0, 0, 255, 255))
+        $ _reset_size = renpy.display.draw.texture_loader.get_texture_size()
+        $ _reset_old = None
+        $ renpy.display.draw.texture_loader.cleanup()
+        assert eval renpy.display.draw.texture_loader.get_texture_size() == _reset_size
+        $ _reset_pixel = tuple(renpy.display.draw.screenshot(_reset_new).get_at((32, 32)))
+        $ _reset_new = None
+        assert eval _reset_pixel == (0, 0, 255, 255)

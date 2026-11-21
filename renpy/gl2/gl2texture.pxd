@@ -43,6 +43,9 @@ cdef class TextureLoader:
     # The program used for fast texture loading
     cdef Program ftl_program
 
+    # Incremented by init(), which forgets every texture number allocated before it.
+    cdef int generation
+
     # The queue of textures that need to be loaded.
     cdef object texture_load_queue
 
@@ -67,6 +70,9 @@ cdef class GLTexture(GL2Model):
 
     # The number of the texture in OpenGL.
     cdef public unsigned int number
+
+    # The loader generation that owns number.
+    cdef int generation
 
     # Has this texture been loaded yet?
     cdef public bint loaded

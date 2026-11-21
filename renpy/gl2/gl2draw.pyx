@@ -825,6 +825,8 @@ cdef class GL2Draw:
             self.quit_fbo()
             if full_reset:
                 self.shader_cache.clear()
+                # Freeing the program later would delete whatever reuses its number in the new context.
+                self.texture_loader.ftl_program = None
 
         if full_reset:
             recreated = pygame.display.get_window().recreate_gl_context()
