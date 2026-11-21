@@ -192,6 +192,8 @@ def load_image(f, filename, size=None, copy=True):
         return surf
 
     rv = copy_surface_unscaled(surf)
+    # The copy's border is fully transparent, so premultiplying the whole copy still changes nothing.
+    rv.opaque = surf.opaque
     return rv
 
 

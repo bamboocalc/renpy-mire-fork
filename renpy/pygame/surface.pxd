@@ -58,6 +58,7 @@ cdef class Surface:
 
     cdef void take_surface(self, SDL_Surface *)
     cdef void _blend(self, Surface source, int function)
+    cdef void _modified(self)
 
     cdef bint has_alpha
 

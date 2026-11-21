@@ -270,3 +270,42 @@ def test_fill_clips_a_rect_above_the_surface_by_its_height():
     assert tuple(surface.fill((255, 0, 0, 255), (0, -2, 3, 4))) == (0, 0, 3, 2)
     assert tuple(surface.get_at((2, 1))) == (255, 0, 0, 255)
     assert tuple(surface.get_at((0, 2))) == (0, 0, 0, 0)
+
+
+def rgb_png():
+    """A 4x4 PNG with no alpha channel, which image.load reports as opaque."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    rows = b"".join(b"\0" + bytes((12, 34, 56)) * 4 for _ in range(4))
+    return io.BytesIO(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+@pytest.mark.parametrize("edit", ["fill", "set_at", "blit", "subsurface"])
+def test_pixel_writes_clear_the_opaque_flag(edit):
+    """Textures skip premultiplying opaque decodes, so any write that could add alpha must clear the flag."""
+    surface = pygame.image.load(rgb_png(), namehint=".png")
+    assert surface.opaque
+    if edit == "fill":
+        surface.fill((0, 0, 0, 0), (0, 0, 1, 1))
+    elif edit == "set_at":
+        surface.set_at((0, 0), (255, 0, 0, 0))
+    elif edit == "blit":
+        surface.blit(pygame.Surface((1, 1), pygame.SRCALPHA, 32), (0, 0))
+    else:
+        surface.subsurface((1, 1, 2, 2)).fill((0, 0, 0, 0))
+    assert not surface.opaque
+
+
+def test_loaded_copy_keeps_the_opaque_flag():
+    """The bordered copy of an opaque decode is still unchanged by premultiplication, so it keeps the fast upload."""
+    import renpy.display.pgrender
+
+    copy = renpy.display.pgrender.load_image(rgb_png(), "opaque.png")
+    assert copy.opaque
+    assert tuple(copy.get_at((0, 0))) == (12, 34, 56, 255)
+    assert tuple(copy.get_parent().get_at((0, 0))) == (0, 0, 0, 0)

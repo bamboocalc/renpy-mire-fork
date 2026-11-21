@@ -181,6 +181,13 @@ cdef class Surface:
         cdef const SDL_PixelFormatDetails *format = SDL_GetPixelFormatDetails(self.sdl_surface.format)
         return "<Surface({}x{}x{})>".format(self.sdl_surface.w, self.sdl_surface.h, format.bits_per_pixel)
 
+    cdef void _modified(self):
+        # Pixels written through a subsurface also change every surface above it.
+        cdef Surface s = self
+        while s is not None:
+            s.opaque = False
+            s = s.parent
+
     def blit(self, Surface source, dest, area=None, int special_flags=0):
         cdef SDL_Rect dest_rect
         cdef SDL_Rect area_rect
@@ -189,6 +196,8 @@ cdef class Surface:
 
         cdef Surface source_view
         cdef Surface dest_view
+
+        self._modified()
 
         cdef int success
         cdef int src_x
@@ -604,6 +613,8 @@ cdef class Surface:
         cdef Uint32 pixel = map_color(self.sdl_surface, color)
         cdef int success
 
+        self._modified()
+
         if rect is not None:
             to_sdl_rect(rect, &sdl_rect)
 
@@ -722,6 +733,7 @@ cdef class Surface:
             raise ValueError("Position outside surface.")
 
         pixel = map_color(self.sdl_surface, color)
+        self._modified()
 
         p = <Uint8 *> self.sdl_surface.pixels
         p += y * self.sdl_surface.pitch
