@@ -2695,6 +2695,8 @@ def draw_render(what, int drawable_width, int drawable_height, Matrix projection
             profiler.end()
             profiler.poll()
         set_scissor(None)
+        # Texture uploads between passes draw a quad, which a culling model left behind would discard.
+        set_cull_face(None)
         glDepthMask(True)
         glDisable(GL_DEPTH_TEST)
 

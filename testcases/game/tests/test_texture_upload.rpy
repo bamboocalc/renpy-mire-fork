@@ -165,3 +165,18 @@ testsuite texture_context_reset:
         $ _reset_pixel = tuple(renpy.display.draw.screenshot(_reset_new).get_at((32, 32)))
         $ _reset_new = None
         assert eval _reset_pixel == (0, 0, 255, 255)
+
+init python:
+
+    def texture_cull__pixel(cull_face):
+        """Loads a straight-alpha texture right after a pass whose last model culled faces."""
+        renpy.render_to_surface(Transform(Solid("#0f0", xysize=(64, 64)), gl_cull_face=cull_face), 64, 64)
+        return tuple(renpy.display.draw.screenshot(texture_reset__make((255, 0, 0, 255))).get_at((32, 32)))
+
+testsuite texture_cull_face:
+
+    testcase upload_after_culled_pass:
+        description "Culling left on by a pass removed the quad that premultiplies a texture, which then copied the framebuffer."
+        parameter cull_face = ["cw", "ccw"]
+
+        assert eval texture_cull__pixel(cull_face) == (255, 0, 0, 255)
