@@ -111,13 +111,16 @@ testsuite shaders:
         python:
             compiled = 0
 
+            # Parts that call a function from another part, which production always adds with them.
+            companions = {"renpy.gltf.dof": ("renpy.gltf.scene_depth",)}
+
             for name in sorted(renpy.gl2.gl2shadercache.shader_part):
                 if not name.startswith("renpy."):
                     continue
                 if name in ("renpy.geometry", "renpy.ftl"):
                     continue
 
-                error = test_shaders__compile("renpy.texture", name)
+                error = test_shaders__compile("renpy.texture", name, *companions.get(name, ()))
                 assert error is None, f"{name} did not compile: {error}"
                 compiled += 1
 

@@ -2593,6 +2593,8 @@ class GLTFScene(Displayable):
                 "gltf_depth_required": True, "mipmap": False, "drawable_resolution": coverage is None})
             rv.add_shader("renpy.gltf.scene_depth")
             rv.add_uniform("u_gltf_scene_depth", scene)
+            # Shaders above the scene map a_tex_coord through this onto a guarded depth texture.
+            rv.add_uniform("u_gltf_output_region", region)
             rv.add_uniform("u_gltf_depth_inverse", projection.inverse())
             rv.add_uniform("u_gltf_depth_perspective", float(abs(projection.wdz) > 0.000001))
             rv.add_uniform("u_gltf_depth_scale", self.meters_per_unit)
@@ -2695,8 +2697,10 @@ class GLTFDepthOfField(Displayable):
         rv.blit(scene, (0, 0))
         rv.mesh = True
         rv.add_shader("renpy.gltf.dof")
+        if source.properties is not None and "mesh_oversample" in source.properties:
+            rv.add_property("mesh_oversample", source.properties["mesh_oversample"])
         rv.add_shader("renpy.gltf.scene_depth")
-        if "u_gltf_output_region" in source.uniforms:
+        if "u_gltf_output_mask" in source.uniforms:
             rv.add_shader("renpy.gltf.guard")
             rv.add_uniform("u_gltf_output_mask", source.uniforms["u_gltf_output_mask"])
             rv.add_uniform("u_gltf_output_region", source.uniforms["u_gltf_output_region"])

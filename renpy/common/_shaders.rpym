@@ -887,7 +887,8 @@ init python:
             if (travel > 0.0 && u_material_attenuation_distance > 0.0)
                 tint *= pow(u_material_attenuation_color, vec3(travel * u_gltf_meters_per_unit / u_material_attenuation_distance));
             tint = mix(vec3(1.0), tint, coverage);
-            if (all(greaterThanEqual(tint, vec3(0.999999)))) discard;
+            // A clear lens with IOR above 1 still bends light for caustics.
+            if (ior <= 1.0 && all(greaterThanEqual(tint, vec3(0.999999)))) discard;
             gl_FragDepth = depth;
             fragment_color = vec4(tint, coverage);
             #ifdef GLTF_CAUSTIC_DATA
@@ -1035,7 +1036,8 @@ init python:
             int bits = i;
             float radical = 0.0, fraction = 0.5;
             for (int j = 0; j < 8; ++j) {
-                radical += float(bits % 2) * fraction;
+                // Integer remainder needs GLSL ES 3.00.
+                radical += float(bits - (bits / 2) * 2) * fraction;
                 bits /= 2;
                 fraction *= 0.5;
             }
@@ -1129,7 +1131,9 @@ init python:
         float gltf_scene_distance(vec2 uv) {
             float depth = texture(u_gltf_scene_depth, uv).r;
             vec4 point = u_gltf_depth_inverse * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-            float distance = u_gltf_depth_perspective > 0.5 ? abs(1.0 / point.w) : abs(point.z / point.w);
+            // An infinite far plane reconstructs background depth with w = 0, where the quotient is undefined.
+            float w = max(abs(point.w), 1e-20);
+            float distance = u_gltf_depth_perspective > 0.5 ? 1.0 / w : abs(point.z) / w;
             return distance * u_gltf_depth_scale;
         }
     """)

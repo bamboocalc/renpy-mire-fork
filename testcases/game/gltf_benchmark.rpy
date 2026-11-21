@@ -66,7 +66,9 @@ init python:
         modes = ("opaque", "shadows", "glass", "static_shadows", "static_glass")
         result = {"renderer": renpy.get_renderer_info(), "size": (1280, 720),
             "warmup_frames": 5, "sample_frames": 30, "profile_frames": 10, "modes": {}}
-        for mode, cached_shadows in [(mode, cached) for mode in modes for cached in (False, True)]:
+        # Opaque frames draw no shadows, so the shadow cache setting cannot change them.
+        for mode, cached_shadows in [(mode, cached) for mode in modes
+                for cached in ((True,) if mode == "opaque" else (False, True))]:
             scene, model = _gltf_benchmark_scene(shadows=mode != "opaque", transmission="glass" in mode,
                 shadow_cache=cached_shadows, animated=not mode.startswith("static"))
             started = time.perf_counter()
@@ -134,7 +136,7 @@ testsuite assimp_scene_benchmark:
         assert eval _gltf_benchmark_results["modes"]["glass"]["first_frame_hash"] != _gltf_benchmark_results["modes"]["glass"]["last_frame_hash"]
         assert eval _gltf_benchmark_results["modes"]["opaque"]["last_frame_hash"] != _gltf_benchmark_results["modes"]["glass"]["last_frame_hash"]
         assert eval _gltf_benchmark_results["modes"]["shadows"]["last_frame_hash"] != _gltf_benchmark_results["modes"]["glass"]["last_frame_hash"]
-        assert eval all(_gltf_benchmark_results["modes"][mode]["last_frame_hash"] == _gltf_benchmark_results["modes"][mode + "_uncached"]["last_frame_hash"] for mode in ("opaque", "shadows", "glass", "static_shadows", "static_glass"))
+        assert eval all(_gltf_benchmark_results["modes"][mode]["last_frame_hash"] == _gltf_benchmark_results["modes"][mode + "_uncached"]["last_frame_hash"] for mode in ("shadows", "glass", "static_shadows", "static_glass"))
         assert eval _gltf_benchmark_results["modes"]["static_shadows"]["profile"]["passes"].get("shadow", {}).get("draws", 0) == 0
         assert eval _gltf_benchmark_results["modes"]["static_shadows_uncached"]["profile"]["passes"]["shadow"]["draws"] > 0
         run MainMenu(confirm=False)

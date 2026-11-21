@@ -949,10 +949,11 @@ Specular adjusts dielectric weight/tint without suppressing metallic
 reflections. Sheen adds a Charlie cloth lobe with energy compensation;
 its environment approximation uses diffuse-filtered radiance and a numerical
 directional-albedo lookup. Clearcoat has its own normal map and roughness,
-and lies above both cloth shading and emission. Combining every map and lobe
-can require 18 fragment samplers, exceeding some desktop GPUs' limits; the
-driver rejects unsupported combinations. Ordinary PBR keeps its original
-active sampler requirements. Anisotropy, iridescence, and specular-glossiness
+and lies above both cloth shading and emission. Ordinary PBR uses 11 active
+fragment samplers. Specular, clearcoat and sheen together raise that to 18,
+and adding colored shadows, caustics and transparency layers raises it to 22.
+GPUs limited to 16 fragment samplers cannot run the heavier combinations, and
+the driver rejects them when the shader links. Anisotropy, iridescence, and specular-glossiness
 materials remain unsupported.
 
 Punctual lights and shadows
@@ -1193,14 +1194,17 @@ above it, for example through a :class:`Transform` ``shader``. Such a shader
 runs while the scene's output is drawn into its parent, so it can write
 ``gl_FragDepth`` for other displayables there. It can call
 ``gltf_scene_distance(uv)``, which returns the camera distance in meters at a
-scene texture coordinate, and read the scene's HDR color from ``tex0``::
+scene texture coordinate, and read the scene's HDR color from ``tex0``. A
+scene with a ``refraction_margin`` renders more than it shows, so map
+``a_tex_coord`` through ``u_gltf_output_region`` to get scene coordinates::
 
     init python:
         renpy.register_shader("mygame.fog", glsl=300, variables="""
+            uniform vec4 u_gltf_output_region;
             in vec2 a_tex_coord;
             out vec2 v__fog_uv;
         """, vertex_200="""
-            v__fog_uv = a_tex_coord;
+            v__fog_uv = u_gltf_output_region.xy + a_tex_coord * u_gltf_output_region.zw;
         """, fragment_300="""
             float fog = clamp(gltf_scene_distance(v__fog_uv) / 20.0, 0.0, 1.0);
             fragment_color.rgb = mix(fragment_color.rgb, vec3(0.6) * fragment_color.a, fog);

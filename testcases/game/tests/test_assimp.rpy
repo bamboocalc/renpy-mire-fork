@@ -27,7 +27,7 @@ init python:
         fragment_color = u_baked_test_color;
     """)
 
-    def assimp_integration__scene(blur=None, color=(0.25, 0.5, 0.75), glass=True, tone_mapping="reinhard", glass_blend=False):
+    def assimp_integration__scene(blur=None, color=(0.25, 0.5, 0.75), glass=True, tone_mapping="reinhard", glass_blend=False, layers=0, margin=0.0):
         """Use only redistributable fixture geometry, with the same depth-in-alpha contract as a baked-room shader."""
         baked = Transform(GLTFModel("models/material-sided.gltf", zoom=100,
             shader=("assimp_baked.depth", "renpy.gltf.baked_srgb"), u_baked_test_color=(*color, 0.08)),
@@ -37,14 +37,16 @@ init python:
             blend = {"u_material_gltf_alphamode": 2.0} if glass_blend else {}
             children.append(assimp_pbr__plane(u_material_transmission_factor=1.0, u_material_ior=1.0, **blend))
         scene = GLTFScene(assimp_alpha__camera(*children), light_color=(0, 0, 0),
-            meters_per_unit=0.01, depth_output=blur is not None, tone_mapping=tone_mapping)
+            meters_per_unit=0.01, depth_output=blur is not None, tone_mapping=tone_mapping, transparency_layers=layers,
+            refraction_margin=margin)
         return GLTFDepthOfField(scene, max_blur=blur, focus_distance=6.0) if blur is not None else scene
 
     renpy.register_shader("assimp_integration.distance", glsl=300, variables="""
+        uniform vec4 u_gltf_output_region;
         in vec2 a_tex_coord;
         out vec2 v__distance_uv;
     """, vertex_200="""
-        v__distance_uv = a_tex_coord;
+        v__distance_uv = u_gltf_output_region.xy + a_tex_coord * u_gltf_output_region.zw;
     """, fragment_300="""
         fragment_color = vec4(gltf_scene_distance(v__distance_uv) / 10.0, 0.0, 0.0, 1.0);
     """)
@@ -1079,6 +1081,16 @@ testsuite assimp_caustics:
         $ _caustic_cap = assimp_pbr__tinted(_caustic_reference, (4, 4, 4), 1)
         assert eval _caustic_active[0] > _caustic_plain[0] + 10 and _caustic_active[0] <= _caustic_cap[0] + 2
 
+    testcase clear_lens:
+        parameter specular = [1.0, 0.0]
+        description "A white lens focuses light even when zero specular weight leaves its transmittance at exactly one."
+
+        $ _caustic_light = GLTFLight("directional", direction=(-1, 0, -1), intensity=3.14159265359)
+        $ _caustic_lens = Transform(GLTFModel("models/material-caustic-lens.gltf", shader="renpy.gltf.pbr", zoom=20, u_color_base=(1., 1., 1., 1.), u_tex_base_color=im.Null("#fff"), u_material_specular_factor=specular, u_material_attenuation_color=(1., 1., 1.), u_material_attenuation_distance=0., u_material_transmission_factor=1., u_material_roughnessfactor=0., u_material_metallicfactor=0., u_material_ior=1.5), xpos=250, ypos=150, zpos=50)
+        $ _caustic_plain = assimp_pbr__pixels(assimp_pbr__plane(), _caustic_lens, light_color=(0, 0, 0), lights=(_caustic_light,), meters_per_unit=.01, colored_shadows=True, shadow_size=512)
+        $ _caustic_active = assimp_pbr__pixels(assimp_pbr__plane(), _caustic_lens, light_color=(0, 0, 0), lights=(_caustic_light,), meters_per_unit=.01, caustics=True, shadow_size=512)
+        assert eval _caustic_active[0] > _caustic_plain[0] + 10
+
     testcase rough_glass:
         description "Fully rough glass retains ordinary colored shadows without a focused caustic contribution."
 
@@ -1522,6 +1534,17 @@ testsuite assimp_camera:
         $ _camera_pixel = assimp_alpha__pixels(_camera_effect, ((200, 150),))[0]
         assert eval assimp_alpha__close(_camera_pixel, assimp_pbr__expected((0.97,) * 3))
 
+    testcase orthographic_focus:
+        parameter focused = [False, True]
+        description "Orthographic depth reconstruction keeps a checker at the 5 meter focal plane sharp and blurs it elsewhere."
+
+        $ _camera_source = GLTFModel("models/scene-cameras.gltf", scene=True, zoom=100)
+        $ _camera_checker = GLTFModel("models/material-refraction-checker.gltf", shader="renpy.gltf.pbr", zoom=200)
+        $ _camera_scene = GLTFScene(GLTFCamera(_camera_source, _camera_checker, camera="MainOrthographic"), light_color=(0, 0, 0), meters_per_unit=0.01, depth_output=True)
+        $ _camera_effect = GLTFDepthOfField(_camera_scene, focus_distance=5.0 if focused else 1.0, focus_range=0.2, max_blur=12)
+        $ _camera_pixel = assimp_alpha__pixels(_camera_effect, ((200, 150),))[0]
+        assert eval (max(_camera_pixel[0], _camera_pixel[2]) > 180 and min(_camera_pixel[0], _camera_pixel[2]) < 3 if focused else min(_camera_pixel[0], _camera_pixel[2]) > 30)
+
     testcase live_camera:
         description "A camera-only source requests redraws even when the displayed geometry comes from a separate model."
 
@@ -1574,18 +1597,26 @@ testsuite assimp_integration:
         $ _integrated_pixel = assimp_alpha__pixels(_integrated, ((200, 150),))[0]
         assert eval assimp_alpha__close(_integrated_pixel, (64, 128, 191, 255))
 
-    testcase scene_distance:
-        description "A shader above a depth-output scene reads the baked plane's camera distance of 6 meters."
-
-        $ _integrated = Transform(assimp_integration__scene(blur=0, glass=False).child, shader="assimp_integration.distance")
+    testcase zoomed_refractive_depth_of_field:
+        description "A zoomed refractive DoF pass shares drawable resolution with its depth and color textures."
+        $ _integrated = Transform(assimp_integration__scene(blur=8, tone_mapping=None), zoom=2.0)
         $ _integrated_pixel = assimp_alpha__pixels(_integrated, ((200, 150),))[0]
-        assert eval abs(_integrated_pixel[0] - 153) <= 2
+        assert eval assimp_alpha__close(_integrated_pixel, (64, 128, 191, 255))
+
+    testcase scene_distance:
+        parameter margin = [0.0, 0.25]
+        description "A shader above a depth-output scene reads the baked plane's 6 meters near its edge, through any refraction margin."
+
+        $ _integrated = Transform(assimp_integration__scene(blur=0, glass=False, margin=margin).child, shader="assimp_integration.distance")
+        $ _integrated_pixels = assimp_alpha__pixels(_integrated, ((200, 150), (270, 150)))
+        assert eval all(abs(pixel[0] - 153) <= 2 for pixel in _integrated_pixels)
 
     testcase glass_distance:
         parameter blend = [False, True]
-        description "Opaque-mode glass reports its own 5 meter distance, while blend-mode glass leaves the 6 meter plane's."
+        parameter layers = [0, 2]
+        description "Opaque-mode glass reports its own 5 meter distance, while blend-mode glass leaves the 6 meter plane's, with or without peeling."
 
-        $ _integrated = Transform(assimp_integration__scene(blur=0, glass_blend=blend).child, shader="assimp_integration.distance")
+        $ _integrated = Transform(assimp_integration__scene(blur=0, glass_blend=blend, layers=layers).child, shader="assimp_integration.distance")
         $ _integrated_pixel = assimp_alpha__pixels(_integrated, ((200, 150),))[0]
         assert eval abs(_integrated_pixel[0] - (153 if blend else 127)) <= 2
 

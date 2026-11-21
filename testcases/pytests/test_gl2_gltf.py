@@ -419,3 +419,12 @@ def test_shadow_signature_freezes_mutable_sampler_settings():
     original = gltf.shadow_signature(record, False)
     wrapping[0] = renpy.uguu.GL_CLAMP_TO_EDGE
     assert gltf.shadow_signature(record, False) != original
+
+
+@pytest.mark.parametrize("enabled, shadow_light", [(True, False), (False, True)])
+def test_shadow_atlas_skips_mesh_bounds_without_shadow_cameras(mocker, enabled, shadow_light):
+    """Disabled shadows, or no shadow-casting light, need no scene bounds; each mesh's corners cost eight transforms."""
+    corners = mocker.patch.object(gltf, "mesh_corners", return_value=[(0, 0, 0)])
+    lights = [(gltf.GLTFLight("directional"), (0, 0, 0), (0, 0, -1))] if shadow_light else []
+    gltf.shadow_uniforms([(None, None, None, None, {}, {})] * 3, lights, 512, 0.0, 0.01, enabled, False)
+    assert not corners.called

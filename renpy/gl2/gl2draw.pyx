@@ -2248,6 +2248,17 @@ cdef class GL2DrawingContext:
             self.transparent_models.append((depth, len(self.transparent_models), snapshot, model, mesh))
             return
 
+        if mode == "layer":
+            # Peeled layers report scene depth by the same rule as draw_transparent.
+            glDepthMask(bool(self.properties.get("gltf_transmission", False)
+                and self.uniforms.get("u_gltf_transmission_enabled", 0.0)
+                and self.uniforms.get("u_material_gltf_alphamode", 0.0) != 2.0))
+            try:
+                self.draw_mesh(model, mesh)
+            finally:
+                glDepthMask(True)
+            return
+
         self.draw_mesh(model, mesh)
 
     cdef void draw_mesh(self, model, Mesh mesh):

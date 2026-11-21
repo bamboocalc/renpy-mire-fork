@@ -663,9 +663,10 @@ def shadow_uniforms(meshes, lights, size, bias, meters_per_unit, enabled, transm
     data = [(-1.0, 1.0, 0.0, 0.0)] * MAX_LIGHTS
     cascade_matrices = [identity] * (MAX_LIGHTS * 3)
     cascade_eye, cascade_forward, limits, frusta = (0, 0, 0), (0, 0, -1), [0, distance / meters_per_unit], ()
-    points = [point for record in meshes for point in mesh_corners(record)]
     jobs = []
     active = [entry for entry in lights if entry[0].cast_shadows and entry[0].intensity and any(entry[0].color)]
+    # Bounds only place shadow cameras, so skip the per-mesh corner transforms when no light needs one.
+    points = [point for record in meshes for point in mesh_corners(record)] if enabled and active else []
     count = sum(cascades if light.kind == "directional" else
         1 if light.kind == "spot" and light.outer_cone_angle < math.pi / 2 - .0001 else 6
         for light, _position, _direction in active) if enabled and points else 0
