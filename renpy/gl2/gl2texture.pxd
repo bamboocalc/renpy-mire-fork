@@ -33,7 +33,7 @@ cdef class TextureLoader:
     # All the texture number currently allocated by this loader.
     cdef set allocated
 
-    # A list of (number, generation) pairs for textures that need to be freed.
+    # A list of (number, storage) pairs for textures that need to be freed.
     cdef list free_list
 
     # The total size (in bytes) of all the textures that have been allocated
@@ -73,6 +73,9 @@ cdef class GLTexture(GL2Model):
 
     # The loader generation that owns number.
     cdef int generation
+
+    # Describes a render target's storage if another target may reuse it once freed, or None.
+    cdef object storage
 
     # Has this texture been loaded yet?
     cdef public bint loaded

@@ -269,6 +269,20 @@ cdef class TextureLoader:
 
         return rv
 
+    def take_freed(self, storage):
+        """
+        Returns the number of a texture that was freed since the last cleanup with storage matching `storage`,
+        and gives it up to the caller. Returns 0 if there isn't one.
+        """
+
+        for i, (number, freed) in enumerate(self.free_list):
+            if freed == storage:
+                del self.free_list[i]
+                self.allocated.discard(number)
+                return number
+
+        return 0
+
     def render_to_texture(self, what, properties, oversample=1.0):
         """
         Renders `what` to a texture.
@@ -286,7 +300,7 @@ cdef class TextureLoader:
 
         cdef GLuint texnums[1]
 
-        for texture_number in self.free_list:
+        for texture_number, _storage in self.free_list:
             texnums[0] = texture_number
             glDeleteTextures(1, texnums)
 
@@ -359,6 +373,7 @@ cdef class GLTexture(GL2Model):
 
         self.depth_texture = None
         self.compressed = None
+        self.storage = None
 
         # Borders.
         self.bl = 0
@@ -635,9 +650,17 @@ cdef class GLTexture(GL2Model):
             0.0, 0.0, 1.0, 1.0,
             )
 
-        cdef GLuint premultiplied
+        cdef GLuint premultiplied = 0
 
-        glGenTextures(1, &premultiplied)
+        if self.properties["hdr"]:
+            # A changing scene replaces these every frame, and drivers are slow to create and delete them.
+            self.storage = ("hdr", tw, th, renpy.config.max_mipmap_level if self.has_mipmaps() else 0)
+            premultiplied = loader.take_freed(self.storage)
+
+        cdef bint allocate = not premultiplied
+
+        if allocate:
+            glGenTextures(1, &premultiplied)
 
         # Bind the framebuffer.
         draw.change_fbo(draw.fbo)
@@ -646,7 +669,7 @@ cdef class GLTexture(GL2Model):
         cdef Matrix transform
         transform = Matrix.ctexture_projection(cw, ch)
 
-        self.allocate_texture(premultiplied, tw, th, properties)
+        self.allocate_texture(premultiplied, tw, th, properties, allocate)
 
         depth_texture = None
         complete = False
@@ -716,15 +739,20 @@ cdef class GLTexture(GL2Model):
         returns it, or None if the framebuffer can't use it.
         """
 
-        cdef GLuint number
+        storage = ("depth", tw, th)
+        cdef GLuint number = self.loader.take_freed(storage)
+        cdef bint allocate = not number
 
-        glGenTextures(1, &number)
+        if allocate:
+            glGenTextures(1, &number)
+
         glBindTexture(GL_TEXTURE_2D, number)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, tw, th, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL)
+        if allocate:
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, tw, th, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL)
 
         rv = Texture((self.width, self.height), self.loader)
         rv.number = number
@@ -747,6 +775,7 @@ cdef class GLTexture(GL2Model):
             renpy.display.log.write("gl_depth_texture: The framebuffer can't use a %dx%d depth texture.", tw, th)
             return None
 
+        (<GLTexture> rv).storage = storage
         return rv
 
     def detach_depth_texture(GLTexture self):
@@ -953,10 +982,11 @@ cdef class GLTexture(GL2Model):
         self.loaded = True
         self.surface = None
 
-    def allocate_texture(GLTexture self, GLuint tex, int tw, int th, properties={}):
+    def allocate_texture(GLTexture self, GLuint tex, int tw, int th, properties={}, bint allocate=True):
         """
         Allocates the VRAM required to store `tex`, which is a `tw` x `th`
-        texture, including all mipmap levels.
+        texture, including all mipmap levels. If `allocate` is false, `tex`
+        already has that storage, and only its size and sampler state are set.
         """
 
         started = time.perf_counter() if renpy.config.debug_image_cache else 0.0
@@ -1001,6 +1031,9 @@ cdef class GLTexture(GL2Model):
         # Store the texture size that was loaded.
         self.texture_width = tw
         self.texture_height = th
+
+        if not allocate:
+            return
 
         cdef GLuint level = 0
         cdef GLint internal_format = GL_SRGB8_ALPHA8 if properties.get("srgb", False) else GL_RGBA
@@ -1070,6 +1103,8 @@ cdef class GLTexture(GL2Model):
             return
 
         self.properties["mipmap"] = True
+        # Generating mipmaps changes the storage that a later target would expect.
+        self.storage = None
         texture_size = (self.texture_width * self.texture_height * 8 if self.properties.get("hdr", False) or hdr_image
             else self.width * self.height * 4)
         extra_size = int(texture_size * .34)
@@ -1090,7 +1125,7 @@ cdef class GLTexture(GL2Model):
         try:
             # A texture from before a context reset has no number or size left to release.
             if (self.loaded or self.uploading) and self.generation == self.loader.generation:
-                self.loader.free_list.append(self.number)
+                self.loader.free_list.append((self.number, self.storage))
 
                 if "compressed_size" in self.properties:
                     self.loader.total_texture_size -= self.properties["compressed_size"]
