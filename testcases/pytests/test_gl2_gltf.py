@@ -150,6 +150,27 @@ def test_guard_preserves_camera_framing_and_world_coordinates(mocker, scale, max
     assert mask is not None
 
 
+def test_per_frame_scene_walks_leave_no_cycles(mocker):
+    """A recursive closure held each frame's mesh Renders, matrices and dicts until a garbage collection stalled a frame."""
+    import gc
+    from types import FunctionType
+
+    mocker.patch.object(renpy.display, "draw", SimpleNamespace(virt_to_draw=Matrix.scale(1, 1, 1),
+        texture_loader=SimpleNamespace(max_texture_width=2048, max_texture_height=2048)))
+    child = Render(400, 300)
+    child.blit(Render(10, 10), (0, 0))
+    gc.collect()
+    gc.disable()
+    try:
+        gltf.collect_scene(child, 400, 300)
+        gltf.refraction_guard(child, .25)
+        leaked = {i.__qualname__ for i in gc.get_objects() if type(i) is FunctionType
+            and i.__qualname__.startswith(("collect_scene.<locals>", "refraction_guard.<locals>"))}
+    finally:
+        gc.enable()
+    assert not leaked
+
+
 def test_point_light_ignores_a_collapsed_direction_axis():
     """Node scale does not give a point light an orientation, even if it collapses the unused direction vector."""
     light = gltf.GLTFLight(position=(0, 0, 1))

@@ -407,6 +407,8 @@ def collect_scene(root, width, height, imported=True):
             descend(child, m, v, p, values, props)
 
     descend(root, identity, identity, Matrix.texture_projection(max(width, 1), max(height, 1)), {}, {})
+    # A recursive closure is a cycle, which would keep every mesh record until a garbage collection.
+    descend = None
     return meshes, lights
 
 
@@ -520,6 +522,8 @@ def refraction_guard(child, margin):
         return result if result.children else None
 
     mask = viewport(child)
+    # This closure is also recursive, and runs every frame.
+    viewport = None
     if mask is None:
         mask = Render(width, height)
         mask.mesh = renpy.gl2.gl2mesh2.Mesh2.texture_rectangle(0, 0, width, height, 0, 0, 1, 1)
