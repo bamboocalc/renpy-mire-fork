@@ -418,6 +418,9 @@ is long enough to allow the `loop` movie to load.
 The new :var:`config.audio_directories` variable is a list of directories that are searched for audio Files
 and used to populate the :ref:`audio-namespace <audio-namespace>`.
 
+Setting a channel to the audio filter it already has no longer crackles or restarts that filter, and channels given
+the same filter no longer share its state. A filter change made during a fade now continues from what is audible.
+
 Clipboard
 ---------
 

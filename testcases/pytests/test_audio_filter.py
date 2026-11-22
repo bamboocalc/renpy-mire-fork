@@ -1,8 +1,11 @@
 import ctypes
 import pickle
+from types import SimpleNamespace
 
 import pytest
 
+import renpy
+from renpy.audio import audio
 from renpy.audio import filter as audio_filter
 
 
@@ -160,3 +163,221 @@ def test_reverb_keeps_stereo_channels_separate(apply_filter, channel):
     assert output[1 - channel :: 2] == [0.0] * 80
     assert output[:40] == [0.0] * 40
     assert any(output[channel::2])
+
+
+class FilterChannel(audio.Channel):
+    """A channel with its own music context instead of one taken from a running game."""
+
+    context = None
+
+    def interact(self):
+        pass
+
+
+@pytest.fixture
+def new_channel(mocker):
+    """Make channels whose filters are prepared at 1000 Hz, as renpysound does when it's handed one."""
+
+    def prepare(number, filter, playing):
+        if filter is not None:
+            filter.prepare(1000)
+
+    mocker.patch.object(renpy.game, "log", SimpleNamespace(mutated={}))
+    mocker.patch.object(audio, "pcm_ok", True)
+    mocker.patch.object(audio.renpysound, "replace_audio_filter", side_effect=prepare)
+
+    def make():
+        channel = FilterChannel.__new__(FilterChannel)
+        channel.context = audio.MusicContext.__new__(audio.MusicContext)
+        channel.context.last_changed = 0
+        channel.context.last_filenames = []
+        channel.context.last_tight = False
+        channel.context.last_relative_volume = 1.0
+        channel.last_changed = 0
+        channel._number = 0
+        channel.name = "test"
+        channel.queue = []
+        channel.loop = []
+        return channel
+
+    return make
+
+
+def play(apply_filter, channel, samples):
+    """Run samples through the filter that a channel last handed to renpysound."""
+
+    if channel.context.audio_filter is None:
+        return list(samples)
+
+    return apply(apply_filter, channel.context.audio_filter, samples)
+
+
+def tone(frames, start=0):
+    """A stereo signal with no period that fits the 10 ms chunks."""
+
+    return [((i * 7919) % 1009) / 2018 for i in range(start, start + frames) for _channel in range(2)]
+
+
+def definition(kind):
+    """Make a new filter definition like one a game keeps in a variable."""
+
+    if kind == "highpass":
+        return [audio_filter.Highpass(100)]
+
+    # The default allpass frequencies are unstable above the 500 Hz limit of this test rate.
+    return [audio_filter.Reverb(0.7, dampening=150, dry=0.25, allpass_frequences=[225, 341])]
+
+
+@pytest.mark.parametrize("kind", ["highpass", "reverb"])
+@pytest.mark.parametrize("equal_copy", [False, True], ids=["same-objects", "equal-copy"])
+@pytest.mark.parametrize("replace", [False, True], ids=["queued", "replace"])
+def test_setting_the_same_filter_again_keeps_it_playing(apply_filter, new_channel, kind, equal_copy, replace):
+    """Re-entering a scene sets the filter it already has, which must not step, restart, or fade that filter."""
+
+    first = definition(kind)
+    channel = new_channel()
+    channel.set_audio_filter(audio_filter.to_audio_filter(first), replace=True, duration=0.1)
+    steady = new_channel()
+    steady.set_audio_filter(audio_filter.to_audio_filter(definition(kind)), replace=True, duration=0.1)
+    assert play(apply_filter, channel, tone(300)) == play(apply_filter, steady, tone(300))
+
+    again = definition(kind) if equal_copy else first
+    channel.set_audio_filter(audio_filter.to_audio_filter(again), replace=replace, duration=0.5)
+
+    assert play(apply_filter, channel, tone(700, 300)) == play(apply_filter, steady, tone(700, 300))
+
+
+@pytest.mark.parametrize("kind", ["highpass", "reverb"])
+def test_channels_given_one_filter_do_not_share_its_state(apply_filter, new_channel, kind):
+    """One definition on two channels must sound the same as it does on one."""
+
+    shared = audio_filter.to_audio_filter(definition(kind))
+    first, second, alone = new_channel(), new_channel(), new_channel()
+    first.set_audio_filter(shared, replace=True, duration=0)
+    second.set_audio_filter(shared, replace=True, duration=0)
+    alone.set_audio_filter(audio_filter.to_audio_filter(definition(kind)), replace=True, duration=0)
+
+    for start in range(0, 300, 10):
+        assert play(apply_filter, first, tone(10, start)) == play(apply_filter, alone, tone(10, start))
+        play(apply_filter, second, [0.0] * 20)
+
+
+def test_fade_between_filters_that_share_a_child(apply_filter, new_channel):
+    """A new filter that reuses a child of the playing one must not step that child twice."""
+
+    shared = audio_filter.Highpass(100)
+    channel, separate = new_channel(), new_channel()
+    channel.set_audio_filter(shared, replace=True, duration=0)
+    separate.set_audio_filter(audio_filter.Highpass(100), replace=True, duration=0)
+    assert play(apply_filter, channel, tone(100)) == play(apply_filter, separate, tone(100))
+
+    changed = [shared, audio_filter.Multiply(0.5)]
+    channel.set_audio_filter(audio_filter.to_audio_filter(changed), replace=True, duration=0.2)
+    changed = [audio_filter.Highpass(100), audio_filter.Multiply(0.5)]
+    separate.set_audio_filter(audio_filter.to_audio_filter(changed), replace=True, duration=0.2)
+
+    assert play(apply_filter, channel, tone(200, 100)) == play(apply_filter, separate, tone(200, 100))
+
+
+@pytest.mark.parametrize("target", [1.0, None], ids=["filter", "none"])
+def test_interrupted_fade_continues_from_its_mix(apply_filter, new_channel, target):
+    """A change halfway through a fade starts at what was audible, so the output has no step."""
+
+    channel = new_channel()
+    channel.set_audio_filter(audio_filter.Multiply(0.0), replace=True, duration=0.2)
+    before = play(apply_filter, channel, [1.0] * 200)
+    assert before[-1] == pytest.approx(0.505, abs=0.01)
+
+    new = None if target is None else audio_filter.Multiply(target)
+    channel.set_audio_filter(new, replace=True, duration=0.2)
+
+    after = play(apply_filter, channel, [1.0] * 20)
+    assert after[0] == pytest.approx(before[-1], abs=0.02)
+
+
+@pytest.mark.parametrize("started", [False, True], ids=["unstarted", "halfway"])
+def test_removing_a_filter_twice_lets_its_fade_finish(apply_filter, new_channel, started):
+    """A second None must not cut a fade that is still removing the filter."""
+
+    channel = new_channel()
+    channel.set_audio_filter(audio_filter.Multiply(0.0), replace=True, duration=0)
+    play(apply_filter, channel, [1.0] * 20)
+    channel.set_audio_filter(None, replace=True, duration=0.1)
+    expected = play(apply_filter, channel, [1.0] * 100)[-1] if started else 0.0
+
+    channel.set_audio_filter(None, replace=True, duration=0.1)
+
+    assert play(apply_filter, channel, [1.0] * 20)[0] == pytest.approx(expected, abs=0.02)
+    play(apply_filter, channel, [1.0] * 400)
+    channel.set_audio_filter(None, replace=True)
+    assert channel.context.audio_filter is None
+
+
+@pytest.mark.parametrize("last", [0.5, 0.25], ids=["same", "changed"])
+def test_replacing_a_queued_change_fades_from_the_playing_filter(apply_filter, new_channel, last):
+    """A change made with replace=False hasn't been heard yet, so a fade can't start from it."""
+
+    channel = new_channel()
+    channel.set_audio_filter(audio_filter.Multiply(0.0), replace=True, duration=0)
+    play(apply_filter, channel, [1.0] * 20)
+    channel.set_audio_filter(audio_filter.Multiply(0.5), replace=False, duration=0.1)
+
+    channel.set_audio_filter(audio_filter.Multiply(last), replace=True, duration=0.1)
+
+    assert play(apply_filter, channel, [1.0] * 20)[0] == pytest.approx(0.0)
+
+
+def test_unheard_changes_do_not_pile_up(new_channel):
+    """Changes made while nothing plays must not nest a fade for each call."""
+
+    channel = new_channel()
+
+    for i in range(100):
+        channel.set_audio_filter(audio_filter.Multiply(i), replace=True, duration=1.0)
+
+    assert not isinstance(channel.context.audio_filter.filter1, audio_filter.Crossfade)
+
+
+def test_queue_gets_the_channels_filter(new_channel):
+    """Queued tracks use the same filter the mixer was given."""
+
+    channel = new_channel()
+    entry = audio.QueueEntry("next.ogg", 0, False, True, 1.0, None)
+    channel.queue = [entry]
+
+    channel.set_audio_filter(audio_filter.Multiply(0.5))
+
+    assert entry.audio_filter is channel.context.audio_filter
+    assert audio.renpysound.replace_audio_filter.call_args.args == (0, entry.audio_filter, 0)
+
+
+@pytest.mark.parametrize("restored", ["rollback", "load"])
+def test_restored_context_fades_from_the_playing_filter(apply_filter, new_channel, mocker, restored):
+    """Rollback and load hand interact the filter to return to, and the fade starts from the one being heard."""
+
+    saved = audio_filter.Multiply(0.75)
+    channel = new_channel()
+    channel.set_audio_filter(audio_filter.Multiply(0.0), replace=True, duration=0)
+    play(apply_filter, channel, [1.0] * 20)
+    channel.context.last_changed = 1
+    channel.context.raw_audio_filter = saved if restored == "rollback" else pickle.loads(pickle.dumps(saved))
+    channel.context.audio_filter = channel.context.raw_audio_filter
+    mocker.patch.object(audio, "all_channels", [channel])
+    mocker.patch.object(audio, "periodic")
+    mocker.patch.object(audio.renpy.config, "debug_sound", True)
+    mocker.patch.object(audio.renpy.display.video, "last_channel_movie", {"test": True})
+
+    audio.interact()
+
+    assert play(apply_filter, channel, [1.0] * 100)[0] == pytest.approx(0.0)
+    assert channel.context.raw_audio_filter is channel.raw_audio_filter
+
+
+def test_filter_settings_from_script_lists_can_be_copied(apply_filter, new_channel):
+    """Filter arguments written in script are revertable lists."""
+
+    delays = renpy.revertable.RevertableList([0.02, 0.03])
+    channel = new_channel()
+    channel.set_audio_filter(audio_filter.Delay(delays), replace=True, duration=0)
+
+    assert play(apply_filter, channel, [1.0] * 100)[40:42] == [1.0, 0.0]

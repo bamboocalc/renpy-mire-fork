@@ -29,6 +29,7 @@ from renpy.compat import PY2, basestring, bchr, bord, chr, open, pystr, range, r
 
 from typing import Literal
 
+import copy
 import time
 import os
 import re
@@ -772,20 +773,29 @@ class Channel(object):
         """
 
         with lock:
-            old_raw_audio_filter = self.context.raw_audio_filter
-            self.context.raw_audio_filter = audio_filter
-            self.raw_audio_filter = audio_filter
+            # The context can already hold a rollback or load target; the channel holds what the mixer was given.
+            old_audio_filter = self.audio_filter
 
-            if old_raw_audio_filter is None and audio_filter is None:
-                new_audio_filter = None
+            # Filters hold audio state, so an unchanged one keeps running and a changed one gets a private copy.
+            if repr(audio_filter) == repr(self.raw_audio_filter):
+                audio_filter = self.raw_audio_filter
+                new_audio_filter = old_audio_filter
+
+                # A finished fade to no filter is dropped, so it stops adding silence padding.
+                if audio_filter is None and old_audio_filter and old_audio_filter.audible() is old_audio_filter.filter2:
+                    new_audio_filter = None
             else:
+                audio_filter = copy.deepcopy(audio_filter)
                 new_audio_filter = renpy.audio.filter.Crossfade(
-                    old_raw_audio_filter or renpy.audio.filter.Null(),
+                    old_audio_filter.audible() if old_audio_filter else renpy.audio.filter.Null(),
                     audio_filter or renpy.audio.filter.Null(),
                     duration,
                 )
 
+            self.context.raw_audio_filter = audio_filter
             self.context.audio_filter = new_audio_filter
+            self.raw_audio_filter = audio_filter
+            self.audio_filter = new_audio_filter
 
             for q in self.queue:
                 q.audio_filter = new_audio_filter

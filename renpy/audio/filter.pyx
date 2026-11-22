@@ -630,6 +630,20 @@ cdef class Crossfade(AudioFilter):
 
         self.duration_samples = int(self.duration * samplerate)
 
+    def audible(self):
+        """
+        Returns a filter that sounds as this fade does now, for another fade to start from.
+        """
+
+        # A fade that renpysound never prepared, as on web, counts as complete.
+        if self.complete_samples >= self.duration_samples:
+            return self.filter2
+
+        if not self.complete_samples:
+            return self.filter1
+
+        return self
+
     cdef SampleBuffer *apply(self, SampleBuffer *samples) noexcept nogil:
 
         cdef SampleBuffer *result1

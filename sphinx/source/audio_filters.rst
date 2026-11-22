@@ -41,9 +41,11 @@ after a new audio file has started playing, provided the filter is
 not changed.
 
 This means that Ren'Py is storing audio information inside the filter
-object. Because of this, it is generally not a good idea to share filter
-objects between channels, or to use a filter object multiple times with
-a single channel.
+object. Each channel plays its own copy of the filter it is given, so a
+filter can be defined once and set on several channels. Setting a channel to
+the filter it already has, or to one with the same settings, keeps that
+information and doesn't start a new fade. A filter object should still not
+appear more than once inside a single filter.
 
 
 Silence Padding
