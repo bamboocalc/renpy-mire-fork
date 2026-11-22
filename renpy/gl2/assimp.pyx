@@ -2582,7 +2582,8 @@ class GLTFScene(Displayable):
         if refractive:
             rv.add_property("depth_texture", True)
             rv.add_property("gltf_depth_required", True)
-            # One drawable-resolution framebuffer also supplies the per-layer refraction copies.
+        if refractive or coverage is not None:
+            # Refraction copies and guard regions are sized in drawable pixels, so can't be oversampled.
             rv.add_property("mesh_oversample", False)
         rv.add_property("gltf_scene", True)
         if self.depth_output:

@@ -1230,6 +1230,15 @@ testsuite assimp_guard:
         $ _guard_expanded = GLTFScene(_guard_child, light_color=(0, 0, 0), refraction_margin=0.25)
         assert eval assimp_shadow__sample(_guard_plain, 0)["hash"] == assimp_shadow__sample(_guard_expanded, 0)["hash"]
 
+    testcase zoomed_framing:
+        parameter zoom = [1.0, 1.5, 2.0]
+        description "A guarded scene without glass keeps its framing when zoomed up, where its mesh would be oversampled."
+
+        $ _guard_points = [(x * zoom, y * zoom) for x, y in ((130, 110), (170, 140), (195, 145), (20, 20))]
+        $ _guard_plain = assimp_alpha__pixels(Transform(assimp_integration__scene(glass=False), zoom=zoom), _guard_points)
+        $ _guard_expanded = assimp_alpha__pixels(Transform(assimp_integration__scene(glass=False, margin=0.25), zoom=zoom), _guard_points)
+        assert eval all(assimp_alpha__close(a, b) for a, b in zip(_guard_plain, _guard_expanded))
+
     testcase guarded_dof:
         parameter layers = [0, 4]
         parameter focus = [5.0, 7.0]
