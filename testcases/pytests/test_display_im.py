@@ -1,4 +1,6 @@
+import io
 import pickle
+import struct
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -251,6 +253,37 @@ def test_raw_texture_keeps_legacy_image_load_override():
             return surface
 
     assert im.UnoptimizedTexture(Legacy("legacy.png"), premultiply=False).load() is surface
+
+
+def test_qoi_decodes_without_the_unsafe_format_lock():
+    """QOI textures decode in parallel with exact pixels; the unsafe-format lock would serialize the decode pool."""
+    pixels = [(255, 0, 0, 255), (0, 255, 0, 128), (0, 0, 255, 0), (10, 20, 30, 40)]
+    # A minimal QOI file: header, one QOI_OP_RGBA chunk per pixel, end marker.
+    data = b"qoif" + struct.pack(">IIBB", 2, 2, 4, 0) + b"".join(bytes((0xFF,) + p) for p in pixels) + bytes(7) + b"\x01"
+
+    pool = ThreadPoolExecutor(1)
+    try:
+        with renpy.display.pgrender.image_load_lock:
+            future = pool.submit(renpy.display.pgrender.load_image, io.BytesIO(data), "texture.qoi", copy=False)
+            surface = future.result(timeout=2)
+    finally:
+        pool.shutdown()
+
+    assert surface.get_size() == (2, 2)
+    assert bytes(surface.get_buffer()) == bytes(sum(pixels, ()))
+
+
+@pytest.mark.parametrize("channels, opaque", [(3, True), (4, False)])
+def test_qoi_header_marks_images_without_alpha_opaque(channels, opaque):
+    """SDL_image returns every QOI as RGBA; RGB images must stay opaque to keep the direct upload path."""
+    data = b"qoif" + struct.pack(">IIBB", 1, 1, channels, 0) + bytes((0xFE, 10, 20, 30)) + bytes(7) + b"\x01"
+    source = io.BytesIO(b"prefix" + data)
+    source.seek(6)
+
+    surface = renpy.display.pgrender.load_image(source, "texture.qoi", copy=False)
+
+    assert surface.opaque is opaque
+    assert bytes(surface.get_buffer()) == bytes((10, 20, 30, 255))
 
 
 def test_srgb_requires_straight_alpha():

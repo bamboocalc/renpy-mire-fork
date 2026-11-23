@@ -80,6 +80,10 @@ And one vector image file format we recommend:
 Non-animated GIF and BMP files are also supported, but should not be
 used in modern games.
 
+QOI files are supported as a lossless format that is larger than PNG but
+decodes about twice as fast, which suits large textures. Add ``".qoi"`` to
+:var:`config.image_extensions` to have the images directory define them.
+
 Loading an Image from a file on disk and decoding it so it can be
 drawn to the screen takes a long amount of time. While measured in the
 tenths or hundreds of seconds, the duration of the loading process is

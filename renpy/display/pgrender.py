@@ -137,6 +137,7 @@ formats = {
     "jpg",
     "jpeg",
     "webp",
+    "qoi",
     "avif",
     "tga",
     "bmp",
@@ -145,7 +146,7 @@ formats = {
 }
 
 # Formats we can load reentrantly.
-safe_formats = {"png", "jpg", "jpeg", "webp"}
+safe_formats = {"png", "jpg", "jpeg", "webp", "qoi"}
 
 # Lock used for loading unsafe formats.
 image_load_lock = threading.RLock()
@@ -169,6 +170,13 @@ def load_image(f, filename, size=None, copy=True):
     _, _, ext = filename.rpartition(".")
     ext = ext.lower()
 
+    # SDL_image returns every QOI as RGBA; the header's channel count marks images without alpha.
+    qoi_opaque = False
+    if ext == "qoi":
+        start = f.tell()
+        qoi_opaque = f.read(14)[12:13] == b"\x03"
+        f.seek(start)
+
     try:
         if ext in safe_formats:
             surf = pygame.image.load(f, filename, size=size)
@@ -187,6 +195,9 @@ def load_image(f, filename, size=None, copy=True):
         ee = Exception(f"Could not load image {filename!r}")
         ee.add_note(note)
         raise ee from e
+
+    if qoi_opaque:
+        surf.opaque = True
 
     if not copy:
         return surf
