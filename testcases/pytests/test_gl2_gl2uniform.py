@@ -24,9 +24,13 @@
 Tests for renpy.gl2.gl2uniform, the code that sets shader uniforms.
 """
 
+import re
+from pathlib import Path
+
 import pytest
 
-from renpy.gl2.gl2uniform import SamplerSetter
+import renpy
+from renpy.gl2.gl2uniform import UNIFORM_GETTER_CLASSES, GLTFDepthGetter, SamplerSetter
 from renpy.uguu import GL_TEXTURE_2D
 
 
@@ -47,3 +51,19 @@ def test_sampler_property_keys(uniform_name: str, suffix: str) -> None:
 
     assert setter.texture_wrap_key == "texture_wrap_" + suffix
     assert setter.texture_scaling_key == "texture_scaling_" + suffix
+
+
+def test_depth_samplers_are_highp() -> None:
+    """
+    GLSL ES fragment shaders default sampler2D to lowp, and a texture lookup returns the sampler's precision.
+    Drivers that lower lowp lookups to half floats can't hold the 1.5 / 2**24 depth peeling comparisons, so
+    every built-in sampler bound to a depth texture has to be declared highp.
+    """
+
+    depth = {name for name, (getter, _type) in UNIFORM_GETTER_CLASSES.items() if getter is GLTFDepthGetter}
+    source = (Path(renpy.__file__).parent / "common" / "_shaders.rpym").read_text(encoding="utf-8")
+    declared = [(precision, name) for precision, name in re.findall(r"uniform\s+(?:(\w+)\s+)?sampler2D\s+(\w+);", source)
+        if name in depth]
+
+    assert {name for _precision, name in declared} == depth
+    assert sorted({name for precision, name in declared if precision != "highp"}) == []

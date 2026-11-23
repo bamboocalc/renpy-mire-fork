@@ -842,6 +842,7 @@ UNIFORM_GETTER_CLASSES = {
     "u_gltf_linear": (GLTFLinearGetter, "float"),
     "u_gltf_orthographic_camera": (GLTFLinearGetter, "float"),
     "u_gltf_filter_samples": (GLTFLinearGetter, "float"),
+    # Shaders declare these highp; GLSL ES defaults fragment samplers to lowp, too coarse for depth.
     "u_gltf_shadow": (GLTFDepthGetter, "sampler2D"),
     "u_gltf_background_depth": (GLTFDepthGetter, "sampler2D"),
     "u_gltf_scene_depth": (GLTFDepthGetter, "sampler2D"),

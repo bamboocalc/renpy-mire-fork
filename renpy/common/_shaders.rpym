@@ -195,7 +195,7 @@ init python:
 
     _gltf_glass_shadow_variables = """
         uniform sampler2D u_gltf_glass_color;
-        uniform sampler2D u_gltf_glass_depth;
+        uniform highp sampler2D u_gltf_glass_depth;
         uniform sampler2D u_gltf_caustics;
     """
     renpy.register_shader("renpy.gltf.colored_shadows", glsl=300, fragment_functions="#define GLTF_COLORED_SHADOWS 1\n")
@@ -222,7 +222,7 @@ init python:
         uniform sampler2D u_tex_transmission;
         uniform sampler2D u_tex_thickness;
         uniform sampler2D u_gltf_background;
-        uniform sampler2D u_gltf_background_depth;
+        uniform highp sampler2D u_gltf_background_depth;
         uniform vec2 u_gltf_background_OP_res;
         uniform float u_gltf_transmission_enabled;
         uniform float u_material_transmission_factor;
@@ -255,7 +255,7 @@ init python:
         uniform vec4 u_gltf_light_colors[8];
         uniform vec4 u_gltf_light_cones[8];
         uniform float u_gltf_meters_per_unit;
-        uniform sampler2D u_gltf_shadow;
+        uniform highp sampler2D u_gltf_shadow;
         uniform mat4 u_gltf_shadow_matrices[8];
         uniform vec4 u_gltf_shadow_data[8];
         uniform vec4 u_gltf_shadow_atlas;
@@ -725,8 +725,8 @@ init python:
     """)
 
     renpy.register_shader("renpy.gltf.peel_depth", glsl=300, variables="""
-        uniform sampler2D u_gltf_peel_previous;
-        uniform sampler2D u_gltf_peel_opaque;
+        uniform highp sampler2D u_gltf_peel_previous;
+        uniform highp sampler2D u_gltf_peel_opaque;
         uniform vec2 u_gltf_peel_previous_OP_res;
         uniform float u_gltf_peel_first;
     """, fragment_functions="#define GLTF_PEEL_DEPTH 1\n", fragment_150="""
@@ -740,7 +740,7 @@ init python:
     """)
 
     renpy.register_shader("renpy.gltf.peel_color", glsl=300, variables="""
-        uniform sampler2D u_gltf_peel_selected;
+        uniform highp sampler2D u_gltf_peel_selected;
         uniform vec2 u_gltf_peel_selected_OP_res;
     """, fragment_150="""
         float peel_selected = texture(u_gltf_peel_selected, gl_FragCoord.xy / u_gltf_peel_selected_OP_res).r;
@@ -751,7 +751,7 @@ init python:
 
     renpy.register_shader("renpy.gltf.depth_copy", glsl=300, variables="""
         uniform sampler2D tex0;
-        uniform sampler2D u_gltf_copy_depth;
+        uniform highp sampler2D u_gltf_copy_depth;
         in vec2 a_tex_coord;
         out vec2 v__uv;
     """, vertex_200="""
@@ -762,7 +762,7 @@ init python:
     """)
 
     renpy.register_shader("renpy.gltf.shadow_copy", glsl=300, variables="""
-        uniform sampler2D u_gltf_shadow;
+        uniform highp sampler2D u_gltf_shadow;
         in vec2 a_tex_coord;
         out vec2 v__uv;
     """, vertex_200="""
@@ -797,8 +797,8 @@ init python:
         uniform float u_material_gltf_alphacutoff;
         uniform mat4 u_model_OP_inverse_transpose;
         uniform vec4 u_gltf_shadow_direction;
-        uniform sampler2D u_gltf_glass_opaque;
-        uniform sampler2D u_gltf_glass_previous;
+        uniform highp sampler2D u_gltf_glass_opaque;
+        uniform highp sampler2D u_gltf_glass_previous;
         uniform float u_gltf_glass_level;
         uniform vec2 u_gltf_glass_resolution;
         uniform float u_gltf_meters_per_unit;
@@ -914,9 +914,9 @@ init python:
         uniform float u_gltf_caustic_size;
         uniform float u_gltf_caustic_warp;
         uniform float u_gltf_meters_per_unit;
-        uniform sampler2D u_gltf_shadow;
+        uniform highp sampler2D u_gltf_shadow;
         uniform sampler2D u_gltf_glass_color;
-        uniform sampler2D u_gltf_glass_depth;
+        uniform highp sampler2D u_gltf_glass_depth;
         uniform sampler2D u_gltf_caustic_data;
         in vec2 a_tex_coord;
         out vec2 v__source;
@@ -1123,7 +1123,7 @@ init python:
     """
 
     renpy.register_shader("renpy.gltf.scene_depth", glsl=300, variables="""
-        uniform sampler2D u_gltf_scene_depth;
+        uniform highp sampler2D u_gltf_scene_depth;
         uniform mat4 u_gltf_depth_inverse;
         uniform float u_gltf_depth_perspective;
         uniform float u_gltf_depth_scale;
