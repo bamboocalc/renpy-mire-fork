@@ -455,6 +455,7 @@ class Particles(renpy.display.displayable.Displayable, renpy.rollback.NoRollback
 
     def _duplicate(self, args):
         rv = Particles(self.factory, animation=self.sm.animation, **self.properties)
+        rv.sm.ignore_time = self.sm.ignore_time
         rv._duplicatable = False
         return rv
 

@@ -2,6 +2,25 @@ init python:
     def test_particle__midpoint(a, b):
         return (a + b) / 2
 
+    def test_particle__replacement_time():
+        times = []
+
+        class TimedImage(renpy.display.layout.Null):
+            def event(self, ev, x, y, st):
+                times.append(st)
+
+        image = TimedImage()
+        original = SnowBlossom(image, 4)
+        original.sm.ignore_time = True
+        manager = original._duplicate(None).sm
+        manager.update_function = None
+        manager.create(image)
+        manager.render(200, 200, 1.0, 1.0)
+        manager.create(image).events = True
+        manager.render(200, 200, 2.0, 2.0)
+        manager.event("click", 0, 0, 3.0)
+        return times
+
     def test_particle__blossoms(d):
         if isinstance(d, renpy.display.particle.Particles):
             return [d]
@@ -49,6 +68,9 @@ screen test_particle__other_menu():
 testsuite particle:
     after testcase:
         run ShowMenu("main_menu")
+
+    testcase duplicated_effect_reuses_static_image_timebase:
+        assert eval test_particle__replacement_time() == [2.0]
 
     testcase snowblossom_menu_return:
         description "GH-7356: Fast SnowBlossom fills a Composite again after returning to its menu."
