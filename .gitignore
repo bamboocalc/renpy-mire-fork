@@ -168,6 +168,7 @@ renpy/gl2/gl2shader.pyi
 renpy/gl2/gl2statecache.pyi
 renpy/gl2/gl2texture.pyi
 renpy/gl2/gl2uniform.pyi
+renpy/gl2/live2dmodel.pyi
 renpy/pydict.pyi
 renpy/pygame/color.pyi
 renpy/pygame/controller.pyi
@@ -189,7 +190,6 @@ renpy/pygame/surface.pyi
 renpy/pygame/time.pyi
 renpy/pygame/transform.pyi
 renpy/style.pyi
-renpy/style.pyi
 renpy/styledata/style_activate_functions.pyi
 renpy/styledata/style_functions.pyi
 renpy/styledata/style_hover_functions.pyi
@@ -209,3 +209,4 @@ renpy/text/texwrap.pyi
 renpy/tfd.pyi
 renpy/uguu/gl.pyi
 renpy/uguu/uguu.pyi
+MIRE_BUG_REPORT_AND_REMEDIATION_PLAN.md

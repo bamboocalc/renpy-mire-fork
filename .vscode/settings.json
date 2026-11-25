@@ -104,7 +104,8 @@
         "renpy/text/texwrap.pyi": true,
         "renpy/tfd.pyi": true,
         "renpy/uguu/gl.pyi": true,
-        "renpy/uguu/uguu.pyi": true
+        "renpy/uguu/uguu.pyi": true,
+        "game/cache/": true
     },
     "renpy.excludeCompiledFilesFromWorkspace": true,
     "renpy.watchFoldersForChanges": false,
