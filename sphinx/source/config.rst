@@ -525,6 +525,9 @@ File I/O
     bundled font. The keys must be lower-case and use forward slashes as
     path separators.
 
+    If the new file is present, automatic image definitions also recognize the
+    original filename. This lets a distribution omit the original image file.
+
     Ren'Py uses this to handle some renamed files internally, so creators should add to this dictionary rather than
     replacing it entirely.
 

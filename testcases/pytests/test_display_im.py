@@ -273,14 +273,17 @@ def test_qoi_decodes_without_the_unsafe_format_lock():
     assert bytes(surface.get_buffer()) == bytes(sum(pixels, ()))
 
 
+@pytest.mark.parametrize("filename", ["texture.qoi", "texture.png", "texture.webp"])
 @pytest.mark.parametrize("channels, opaque", [(3, True), (4, False)])
-def test_qoi_header_marks_images_without_alpha_opaque(channels, opaque):
-    """SDL_image returns every QOI as RGBA; RGB images must stay opaque to keep the direct upload path."""
+@pytest.mark.parametrize("archived", [False, True])
+def test_qoi_header_marks_images_without_alpha_opaque(filename, channels, opaque, archived):
+    """QOI header detection preserves coverage and the read offset even in buffered archives."""
     data = b"qoif" + struct.pack(">IIBB", 1, 1, channels, 0) + bytes((0xFE, 10, 20, 30)) + bytes(7) + b"\x01"
-    source = io.BytesIO(b"prefix" + data)
+    data = b"prefix" + data
+    source = io.BufferedReader(renpy.pygame.iostream.IOBuffer(data)) if archived else io.BytesIO(data)
     source.seek(6)
 
-    surface = renpy.display.pgrender.load_image(source, "texture.qoi", copy=False)
+    surface = renpy.display.pgrender.load_image(source, filename, copy=False)
 
     assert surface.opaque is opaque
     assert bytes(surface.get_buffer()) == bytes((10, 20, 30, 255))

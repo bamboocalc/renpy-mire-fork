@@ -490,6 +490,19 @@ def listdirfiles(common=True, game=True):
     return rv
 
 
+def list_image_filenames():
+    """Include the logical names of renamed files when scanning for automatic images."""
+    filenames = renpy.exports.list_files()
+    present = {name.lower(): name for name in filenames}
+    for source, target in renpy.config.renamed_files.items():
+        target = target.lower()
+        if source not in present and target in present:
+            # An appended extension preserves the source's case and its position in the scan order.
+            before_extension = os.path.splitext(present[target])[0]
+            filenames.append(before_extension if before_extension.lower() == source else source)
+    return sorted(filenames)
+
+
 open_file: Callable[[str | os.PathLike, Literal["rb", "wb"]], io.RawIOBase] = IOPath
 
 

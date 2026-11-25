@@ -37,6 +37,7 @@ init -1900 python:
         if config.images_directory and config.images_directory not in directories:
             directories = directories + [ config.images_directory ]
 
+        filenames = renpy.loader.list_image_filenames()
         for prefix in directories:
 
             prefix = prefix.strip('/') + '/'
@@ -45,7 +46,7 @@ init -1900 python:
 
             oversampled_images = [ ]
 
-            for fn in renpy.list_files():
+            for fn in filenames:
                 if not fn.startswith(prefix):
                     continue
 

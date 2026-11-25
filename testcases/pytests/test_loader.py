@@ -114,6 +114,18 @@ def test_chained_renames_use_cached_final_target(mocker):
     transfn.assert_not_called()
 
 
+def test_image_scan_lists_renamed_sources_when_their_targets_are_present(mocker):
+    """A packaged replacement retains the original name without duplicating loose sources."""
+    names = ["images/Kept.png", "images/Packed.png.qoi"]
+    mocker.patch.object(renpy.exports, "list_files", return_value=names)
+    mocker.patch.object(renpy.config, "renamed_files", {
+        "images/kept.png": "images/packed.png.qoi",
+        "images/packed.png": "images/PACKED.png.qoi",
+        "images/missing.webp": "images/missing.webp.qoi",
+    })
+    assert loader.list_image_filenames() == ["images/Kept.png", "images/Packed.png", "images/Packed.png.qoi"]
+
+
 ################################################################################
 # Search prefixes
 ################################################################################

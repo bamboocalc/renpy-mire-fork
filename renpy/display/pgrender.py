@@ -170,21 +170,25 @@ def load_image(f, filename, size=None, copy=True):
     _, _, ext = filename.rpartition(".")
     ext = ext.lower()
 
-    # SDL_image returns every QOI as RGBA; the header's channel count marks images without alpha.
-    qoi_opaque = False
-    if ext == "qoi":
-        start = f.tell()
-        qoi_opaque = f.read(14)[12:13] == b"\x03"
-        f.seek(start)
-
     try:
+        # A renamed file can retain its old extension. SDL_image decodes even RGB QOI as RGBA.
+        # Probe the same unwrapped stream the image decoder will use.
+        stream = pygame.iostream.open_io(f)
+        start = stream.tell()
+        header = stream.read(14)
+        stream.seek(start)
+
+        is_qoi = header.startswith(b"qoif")
+        hint = "image.qoi" if is_qoi else filename
+        if is_qoi:
+            ext = "qoi"
         if ext in safe_formats:
-            surf = pygame.image.load(f, filename, size=size)
+            surf = pygame.image.load(stream, hint, size=size)
         else:
             # Non-whitelisted formats may not be able to load in a reentrant
             # fashion.
             with image_load_lock:
-                surf = pygame.image.load(f, filename, size=size)
+                surf = pygame.image.load(stream, hint, size=size)
 
     except Exception as e:
         if ext not in formats:
@@ -196,7 +200,7 @@ def load_image(f, filename, size=None, copy=True):
         ee.add_note(note)
         raise ee from e
 
-    if qoi_opaque:
+    if is_qoi and header[12:13] == b"\x03":
         surf.opaque = True
 
     if not copy:
