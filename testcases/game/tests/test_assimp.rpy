@@ -1446,6 +1446,15 @@ testsuite assimp_deformation:
         $ _deform_pixel = assimp_alpha__pixels(_deform_scene, ((230, 150),))[0]
         assert eval assimp_alpha__close(_deform_pixel, (218, 218, 128, 255) if tangent else (128, 242, 185, 255))
 
+    testcase implicit_flat_normals:
+        parameter weight = [0.0, 1.0]
+        description "Adjacent faces use separate normals and a position morph updates the face they shade."
+
+        $ _deform_crease = GLTFModel("models/scene-flat-morph.gltf", scene=True, zoom=100, shader="assimp_deform.frame", u_deform_frame=0.0, node_overrides={"Crease": {"weights": (weight,)}})
+        $ _deform_pixels = assimp_alpha__pixels(assimp_alpha__camera(Transform(_deform_crease, xpos=200, ypos=150)), ((180, 150), (220, 150)))
+        assert eval assimp_alpha__close(_deform_pixels[0], (128, 128, 255, 255))
+        assert eval assimp_alpha__close(_deform_pixels[1], (128, 128, 255, 255) if weight else (37, 128, 218, 255))
+
     testcase nonuniform_skin_normal:
         description "Normals use the inverse transpose of the blended skin matrix under nonuniform joint scale."
 

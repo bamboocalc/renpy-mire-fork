@@ -619,7 +619,43 @@ def _deform_geometry(source, weights, matrices):
             mesh.attribute[vertex * stride + 10] = (normal[0]*tangent[1] - normal[1]*tangent[0]) * handedness
     mesh.bounds = (minx, miny, minz, maxx, maxy, maxz)
     mesh.point_version = mesh.attribute_version = 1
+    if source.flat_normals:
+        return _flat_deform_mesh(mesh)
     return mesh
+
+
+cdef Mesh3 _flat_deform_mesh(Mesh3 mesh):
+    """Split shared corners and derive each face normal from the posed triangle."""
+    cdef int count = mesh.triangles * 3, stride = mesh.layout.stride
+    cdef Mesh3 flat = Mesh3(mesh.layout, count, mesh.triangles)
+    cdef int i, j, source
+    cdef Point3 a, b, c
+    cdef double ux, uy, uz, vx, vy, vz, nx, ny, nz, length
+    if flat.point == NULL or flat.attribute == NULL or flat.triangle == NULL:
+        raise MemoryError("Could not allocate flat glTF vertex normals.")
+
+    with nogil:
+        for i in range(0, count, 3):
+            # Render indices reverse the authored winding in Ren'Py coordinates.
+            a, b, c = mesh.point[mesh.triangle[i]], mesh.point[mesh.triangle[i + 2]], mesh.point[mesh.triangle[i + 1]]
+            ux, uy, uz = <double> b.x - a.x, <double> b.y - a.y, <double> b.z - a.z
+            vx, vy, vz = <double> c.x - a.x, <double> c.y - a.y, <double> c.z - a.z
+            nx, ny, nz = uy*vz - uz*vy, uz*vx - ux*vz, ux*vy - uy*vx
+            length = sqrt(nx*nx + ny*ny + nz*nz)
+            if length == 0:
+                nx, ny, nz, length = 0, 0, 1, 1
+            for j in range(i, i + 3):
+                source = mesh.triangle[j]
+                flat.triangle[j] = j
+                flat.point[j] = mesh.point[source]
+                memcpy(&flat.attribute[j * stride], &mesh.attribute[source * stride], stride * sizeof(float))
+                flat.attribute[j * stride + 2] = nx / length
+                flat.attribute[j * stride + 3] = ny / length
+                flat.attribute[j * stride + 4] = nz / length
+
+    flat.points, flat.triangles, flat.bounds = count, mesh.triangles, mesh.bounds
+    flat.point_version = flat.attribute_version = flat.triangle_version = 1
+    return flat
 
 
 @cython.boundscheck(False)
@@ -1294,7 +1330,7 @@ cdef class Loader:
             binding = "u_material_" + uniform[6:]
             if info.uniforms[binding + "_present"] and int(info.uniforms[binding + "_texcoord"]) not in source.uv_sets:
                 raise ValueError(f"{self.filename!r}: {uniform} requires a missing UV set.")
-        self.model_data.memory_size += source.count * (3 + mesh.layout.stride) * sizeof(float) + len(source.triangles) * 4
+        self.model_data.memory_size += mesh.points * (3 + mesh.layout.stride) * sizeof(float) + len(source.triangles) * 4
         self.mesh_info[cache_key] = info
         return info
 

@@ -1336,8 +1336,9 @@ They may be negative or greater than one. Their count must match the target
 count on every primitive. ``node_overrides={"Face": {"weights": (0.5, 0.0)}}``
 overrides animated weights for that node. Weight clips support STEP, LINEAR,
 and CUBICSPLINE, including sparse accessors. Position, normal, and tangent
-targets retain the source vertex identities. Missing base normals are generated;
-missing authored tangents use the shader's derivative basis. Tangent morphs
+targets retain the source vertex identities. If base normals are absent, each
+deformed triangle gets its own face normal and the shader derives the tangent
+basis from texture coordinates. Tangent morphs
 require authored base tangents. Triangle lists, strips, and fans are supported.
 Accessors are limited to one million elements; morph delta storage is limited
 to 256 MB per primitive. Invalid skin indices, stream lengths, or zero-total

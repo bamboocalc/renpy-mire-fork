@@ -408,18 +408,13 @@ class DeformPrimitive:
                 raise ValueError("Deformation vertex streams must have identical counts.")
             return values
 
-        if "NORMAL" in attributes:
+        self.flat_normals = "NORMAL" not in attributes
+        if not self.flat_normals:
             normals = array.array("d", stream("NORMAL", "VEC3", (0, 0, 0)))
+            tangents = stream("TANGENT", "VEC4", (0, 0, 0, 1))
         else:
-            sums = [[0.0, 0.0, 0.0] for _ in range(count)]
-            for a, b, c in triangles:
-                p = tuple(y - x for x, y in zip(positions[a * 3:a * 3 + 3], positions[b * 3:b * 3 + 3]))
-                q = tuple(y - x for x, y in zip(positions[a * 3:a * 3 + 3], positions[c * 3:c * 3 + 3]))
-                normal = renpy.gl2.gltf.cross(p, q)
-                for vertex in (a, b, c):
-                    sums[vertex] = [x + y for x, y in zip(sums[vertex], normal)]
-            normals = array.array("d", (v / max(math.hypot(*n), 1e-20) for n in sums for v in n))
-        tangents = stream("TANGENT", "VEC4", (0, 0, 0, 1))
+            normals = array.array("d", [0, 0, 1]) * count
+            tangents = array.array("f", [0, 0, 0, 1]) * count
         uv0 = stream("TEXCOORD_0", "VEC2", (0, 0), True)
         uv1 = stream("TEXCOORD_1", "VEC2", (0, 0), True)
         color_index = attributes.get("COLOR_0")
@@ -441,11 +436,12 @@ class DeformPrimitive:
         for target in targets:
             if set(target) - {"POSITION", "NORMAL", "TANGENT"}:
                 raise ValueError("Only position, normal, and tangent morph targets are supported.")
-            values = [reader.geometry(target[name], "VEC3", flat=True) if name in target
+            values = [reader.geometry(target[name], "VEC3", flat=True)
+                if name in target and (name == "POSITION" or not self.flat_normals)
                 else array.array("f", bytes(count * 12)) for name in ("POSITION", "NORMAL", "TANGENT")]
             if any(len(rows) != count * 3 for rows in values):
                 raise ValueError("Morph streams must match the base vertex count.")
-            if "TANGENT" in target and "TANGENT" not in attributes:
+            if not self.flat_normals and "TANGENT" in target and "TANGENT" not in attributes:
                 raise ValueError("A tangent morph requires authored base tangents.")
             self.targets.extend(renpy.gl2.assimp._interleave_targets(count, *values))
         sets = sorted(int(name[7:]) for name in attributes if name.startswith("JOINTS_"))
