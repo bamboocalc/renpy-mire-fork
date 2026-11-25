@@ -79,6 +79,14 @@ def test_scene_info_preserves_names_and_hierarchy(document):
     assert asset.info()["nodes"][1]["name"] == "Door"
 
 
+def test_animation_ignores_channels_without_nodes(document):
+    """An untargeted channel must leave a working clip's other channels playable."""
+    channels = document["animations"][0]["channels"]
+    channels.append({**channels[0], "target": {"path": "translation"}})
+    matrix, _ = pose(document, time=2)
+    assert matrix.transform(0, 0, 0, components=3) == pytest.approx((60, 0, 20))
+
+
 def test_cached_bind_pose_is_independent_of_previous_instances(document):
     """Reusing static transforms cannot leak an animated parent's pose or hidden subtree into another instance."""
     asset = gltfscene.Asset(document, "scene.gltf")

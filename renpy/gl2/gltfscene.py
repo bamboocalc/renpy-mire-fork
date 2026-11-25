@@ -608,11 +608,13 @@ class Asset:
             channels, used = [], set()
             for channel in definition.get("channels", []):
                 target = channel.get("target", {})
+                if "node" not in target:
+                    continue
                 path = target.get("path")
                 if path not in ("translation", "rotation", "scale", "weights"):
                     self.warnings.append(f"Animation {definition.get('name', '')!r}: target {path!r} is unsupported.")
                     continue
-                node_index = index(target.get("node"), self.nodes, "animation node")
+                node_index = index(target["node"], self.nodes, "animation node")
                 if (node_index, path) in used or (path != "weights" and "matrix" in self.nodes[node_index]):
                     raise ValueError("Animation targets must be unique TRS node properties.")
                 used.add((node_index, path))
