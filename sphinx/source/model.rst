@@ -1145,6 +1145,8 @@ are omitted, and coplanar surfaces remain ambiguous within depth24 precision.
 
 Peeling requires one shared camera view/projection and built-in glTF material
 shaders. Standard alpha and matrix-color transforms can accompany them.
+On refractive surfaces, matrix-color transforms cannot derive alpha from RGB,
+because the color depends on the layers discovered by the depth pass.
 Arbitrary transparent fragment-depth shaders and multiple independent cameras
 are unsupported. Hidden geometry and multiple internal ray bounces are still
 not traced. The layer-color shader needs one additional fragment sampler.

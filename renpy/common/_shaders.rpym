@@ -491,7 +491,7 @@ init python:
             if (base.a < u_material_gltf_alphacutoff) discard;
             base.a = 1.0;
         }
-        #ifndef GLTF_PEEL_DEPTH
+        #if !defined(GLTF_PEEL_DEPTH) || defined(GLTF_PEEL_FULL_COVERAGE)
         base.rgb = clamp(base.rgb, 0.0, 1.0);
         vec3 color = base.rgb;
         if (u_material_unlit < 0.5) {
@@ -748,6 +748,9 @@ init python:
     """, fragment_550="""
         if (fragment_color.a <= 0.0) discard;
     """)
+
+    renpy.register_shader("renpy.gltf.peel_full_coverage", glsl=300,
+        fragment_functions="#define GLTF_PEEL_FULL_COVERAGE 1\n")
 
     renpy.register_shader("renpy.gltf.depth_copy", glsl=300, variables="""
         uniform sampler2D tex0;

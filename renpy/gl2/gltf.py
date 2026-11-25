@@ -425,6 +425,14 @@ def peeled_scene(scene, meshes, layers, refractive):
     if any(record[5].get("transparent", False) and set(record[0].shaders or ()) - standard for record in meshes):
         raise ValueError("Depth peeling supports the built-in glTF material shaders and standard color/alpha transforms.")
 
+    full_coverage = False
+    for _, _, _, _, uniforms, properties in meshes:
+        color = uniforms.get("u_renpy_matrixcolor")
+        if properties.get("transparent", False) and color is not None and (color.wdx or color.wdy or color.wdz):
+            if refractive and properties.get("gltf_transmission", False):
+                raise ValueError("Peeled refraction cannot use a matrixcolor that derives alpha from RGB.")
+            full_coverage = True
+
     def variant(mode, shader=None):
         result = Render(width, height)
         for child, x, y, focus, main in scene.children:
@@ -449,6 +457,8 @@ def peeled_scene(scene, meshes, layers, refractive):
     depths = []
     for i in range(layers):
         depth = variant("peel", "renpy.gltf.peel_depth")
+        if full_coverage:
+            depth.add_shader("renpy.gltf.peel_full_coverage")
         depth.add_property("gltf_pass", "transparency_depth")
         depth.add_uniform("u_gltf_peel_first", float(i == 0))
         depth.add_uniform("u_gltf_peel_previous", previous)

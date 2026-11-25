@@ -1032,6 +1032,16 @@ testsuite assimp_peeling:
         $ _peel_pixel = assimp_pbr__pixels(_peel_back, _peel_front, light_color=(0, 0, 0), transparency_layers=1)
         assert eval assimp_alpha__close(_peel_pixel, assimp_pbr__expected((1, 0, 0), alpha=0.5))
 
+    testcase matrixcolor_zero_coverage:
+        parameter unlit = [0.0, 1.0]
+        description "A transparent pane whose matrix derives zero alpha from RGB leaves room for the next layer."
+
+        $ _peel_mask = Matrix([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0])
+        $ _peel_front = Transform(assimp_pbr__plane((0, 0, 0, 0.5), u_material_gltf_alphamode=2.0, u_material_unlit=unlit).child, xpos=200, ypos=150, zpos=50, matrixcolor=_peel_mask)
+        $ _peel_back = assimp_pbr__plane((0, 0, 1, 0.5), z=-50, u_material_gltf_alphamode=2.0, u_material_unlit=1.0)
+        $ _peel_pixel = assimp_pbr__pixels(_peel_back, _peel_front, light_color=(0, 0, 0), transparency_layers=1)
+        assert eval assimp_alpha__close(_peel_pixel, assimp_pbr__expected((0, 0, 1), alpha=0.5))
+
     testcase layered_refraction:
         parameter layers = [2, 4]
         description "Two glass surfaces shade against completed farther HDR layers, retaining Beer absorption and depth."
