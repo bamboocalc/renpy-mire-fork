@@ -72,12 +72,17 @@ init -1100 python:
         def get_sensitive(self):
             return config.has_sync
 
-init 1100 python:
+init 1100 python hide:
 
-    if config.savedir is not None:
-        config.extra_savedirs.append(config.savedir + "/sync")
-    else:
+    # This block is hidden so the import doesn't replace a game's own os variable.
+    import os
+
+    # An existing sync directory is used even when sync is disabled, so saves
+    # downloaded while it was enabled stay available.
+    if config.savedir is None:
         config.has_sync = None
+    elif config.has_sync or os.path.isdir(config.savedir + "/sync"):
+        config.extra_savedirs.append(config.savedir + "/sync")
 
 init -1100 python in _sync:
 

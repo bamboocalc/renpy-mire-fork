@@ -22,6 +22,16 @@ On Android, HTTPS requests, including Ren'Py Sync, :func:`renpy.fetch`, and the 
 the device's certificate store. Since 8.6.0, every such request failed, which made Sync report that it could not
 connect to the Ren'Py Sync server.
 
+Changes have been made to ensure that that Ren'Py will not block waiting for a lost OpenGL context to return.
+
+Ren'Py checks at startup that it can use the operating system's certificate store. If it can't, Ren'Py verifies HTTPS
+certificates against the certificate bundle shipped with certifi, and logs why to log.txt, rather than failing to
+start or failing every HTTPS request.
+
+When :var:`config.has_sync` is False, Ren'Py doesn't create a ``sync`` directory inside the save directory or write
+every save into it as well. If that director yalready exists, it is still used, so saves downloaded while Sync was
+enabled can still be loaded.
+
 Scrying (which predicts things like extend and :var:`config.nvl_page_ctc`) now takes translations into account,
 rather than skipping over them.
 
@@ -40,6 +50,9 @@ waited for the transition timeout and then failed with a RecursionError.
 In the :doc:`testing framework <testcases>`, running tests filtered by testsuite or testcase name works when a
 testcase parameter is a tuple, or a string containing parentheses or dots, instead of failing with an "Invalid
 parameter filter" or "Unmatched parentheses" error.
+
+``renpy.pygame.Surface.blit`` returns the rectangle it drew, taking ``area`` and the clip rectangle into account, as
+pygame does.
 
 Live2D clipping mask textures that are being cropped to save space are now cropped in a way that aligns with
 texels, allowing these textures to be sampled consistently even when the crop changes as the model animates. This keeps
@@ -71,6 +84,9 @@ finger information as well.
 Other Changes
 -------------
 
+``renpy.pygame`` events are closer to pygame-ce's. Aliases and missing fields have been added. The new
+:doc:`pygame_events` page lists every event, its attributes, and how it differs from pygame-ce.
+
 Setting the new :envvar:`RENPY_SCREENSHOT_CLIPBOARD` environment variable to 0 stops the screenshot key from copying
 screenshots to the clipboard.
 
@@ -87,6 +103,23 @@ shader part gain a uniform without breaking code that uses the part directly.
 
 The new ``--list`` option to the ``test`` command lists the test suites and test cases that match the filters, by
 the names used to filter them, without running them. See the :doc:`testing framework <testcases>` documentation.
+
+The ``test`` command quits the game once the tests finish, so a test run no longer needs an ``exit`` in the teardown
+of ``testsuite global`` to end. To keep the game running and continue it with the mouse and keyboard, use the new
+``--persist`` option, or set :var:`config.persist_after_tests` to True. The process exits with status 1 if a test
+failed, even when the player quits the persisting game later.
+
+The size and position of the game window are only saved once the window has stayed the same for two seconds, so the
+sizes a window passes through while it animates, such as when entering fullscreen, are ignored. Previously, a game that
+started in fullscreen could open a window as large as the screen when switched to windowed.
+
+When the launcher opens the copy of Visual Studio Code it installed, it sets the Ren'Py extension's
+``renpy.renpyExecutableLocation`` setting to the current Ren'Py, unless that setting already names a file that
+exists. This lets the extension's tasks run Ren'Py, and stops Visual Studio Code from showing "Error: Illegal argument:
+command can't be undefined or null" in the Tasks output.
+
+On Android and iOS, the reload save made when the game goes to the background is kept until at least 10 frames have
+been drawn over 0.5 seconds after it returns to the foreground.
 
 .. _renpy-8.6.1:
 

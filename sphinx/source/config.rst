@@ -661,9 +661,8 @@ Input, Focus, and Events
                 pygame.FINGERCANCELED,
             ]
 
-    The event types, and the fields each event has, are defined by the
-    ``make_event`` function in
-    `renpy/pygame/event.pyx <https://github.com/renpy/renpy/blob/master/renpy/pygame/event.pyx>`_.
+    The event types, and the fields each event has, are listed in
+    :doc:`pygame_events`.
 
     The event types that are available, and the fields each event has, come
     from the version of SDL that Ren'Py uses, and may change in major
@@ -1316,6 +1315,10 @@ Saving and Loading
 
     If True, the game will autosave. If False, no autosaving will
     occur.
+
+.. var:: config.has_sync = True
+
+    If True, Ren'Py Sync is enabled. If False, it is disabled.
 
 .. var:: config.keep_screenshot_entering_menu = False
 
@@ -2617,6 +2620,13 @@ Debugging
     single parameter, the name of the missing label. It should return the
     name of a label to use as a replacement for the missing label, or None
     to cause Ren'Py to raise an exception.
+
+.. var:: config.persist_after_tests = False
+
+    If False, Ren'Py quits once the tests run by the ``test`` command finish. If True,
+    the game keeps running afterwards, and the player can continue it with the mouse and
+    keyboard. The :option:`--persist` and :option:`--nopersist` options of the ``test``
+    command override this. See :doc:`testcases`.
 
 .. var:: config.profile = False
 

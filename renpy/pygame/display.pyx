@@ -259,6 +259,16 @@ cdef class Window:
         self.surface.get_window_flags = self.get_window_flags
 
 
+    def __reduce__(self):
+        """
+        Pickles a window as a reference to the main window, so that an event
+        whose `window` attribute is a window can be saved. Unpickling gives the
+        main window that exists at that time, or None if there is none.
+        """
+
+        return (get_window, ())
+
+
     def destroy(self):
         """
         This should be called before the window is deleted.
@@ -752,6 +762,14 @@ def get_num_video_displays():
 
     return num_displays
 
+
+def gl_has_current_context():
+    """
+    Returns True if an OpenGL context is current on the calling thread. On Android, SDL releases the
+    context while the app is paused, and creating one then blocks until the app resumes.
+    """
+
+    return SDL_GL_GetCurrentContext() != NULL
 
 def gl_reset_attributes():
     SDL_GL_ResetAttributes()

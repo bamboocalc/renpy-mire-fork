@@ -1091,6 +1091,9 @@ context_copy_remove_screens = ["notify"]
 # An exception handling callback.
 exception_handler: Callable[[renpy.error.TracebackException], bool] | None = None
 
+# If True, the exception screen offers the Ignore button for exceptions that occur during the init phase.
+init_exception_ignore: bool = False
+
 # A label to jump to if return fails.
 return_not_found_label = None
 
@@ -1669,6 +1672,12 @@ gl_vsync: bool = True
 """
 If True, Ren'Py will attempt to enable vsync when creating the OpenGL context. If False, vsync will be disabled.
 This is mostly intended to be set by renpy.test to disable vsync during tests.
+"""
+
+persist_after_tests: bool = False
+"""
+If False, Ren'Py quits once the tests run by the test command finish. If True, the game keeps running and accepts
+player input. The --persist and --nopersist options of the test command override this.
 """
 
 tracesave_screenshot: bool = True
