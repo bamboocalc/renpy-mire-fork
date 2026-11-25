@@ -833,7 +833,7 @@ cdef class GLTexture(GL2Model):
         # But it doesn't seem to work with ANGLE or emscripten, so we avoid using PBOs when
         # angle is in use.
 
-        if not renpy.emscripten and not draw.angle:
+        if not renpy.emscripten and not draw.angle and (renpy.mobile or renpy.config.texture_upload_use_pbo):
 
             glGenBuffers(1, &pixel_buffer)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixel_buffer)
@@ -920,7 +920,7 @@ cdef class GLTexture(GL2Model):
                 glPixelStorei(GL_UNPACK_ROW_LENGTH, s.pitch // 4)
 
                 # Keep the Android alignment workaround and the ANGLE/web fallback.
-                if not renpy.emscripten and not draw.angle:
+                if not renpy.emscripten and not draw.angle and (renpy.mobile or renpy.config.texture_upload_use_pbo):
                     glGenBuffers(1, &pixel_buffer)
                     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixel_buffer)
                     glBufferData(GL_PIXEL_UNPACK_BUFFER, (rows - 1) * s.pitch + self.width * 4, pixels, GL_STREAM_DRAW)
@@ -957,7 +957,7 @@ cdef class GLTexture(GL2Model):
         # But it doesn't seem to work with ANGLE or emscripten, so we avoid using PBOs when
         # angle is in use.
 
-        if not renpy.emscripten and not draw.angle:
+        if not renpy.emscripten and not draw.angle and (renpy.mobile or renpy.config.texture_upload_use_pbo):
 
             glGenBuffers(1, &pixel_buffer)
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pixel_buffer)

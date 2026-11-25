@@ -108,6 +108,9 @@ gltf_shadow_cache_size_mb = 64
 # Maximum bytes per cooperative upload step; zero uploads a whole texture.
 texture_upload_chunk_size = 0
 
+# Use pixel unpack buffers for software surface uploads on desktop OpenGL.
+texture_upload_use_pbo = True
+
 # Should a RawTexture of an image file use a .ktx2 file of the same name the GPU can use?
 compressed_textures = False
 

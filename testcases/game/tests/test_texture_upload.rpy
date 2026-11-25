@@ -33,15 +33,15 @@ init python:
         fragment_color = texture(u_upload_texture, v_upload_texcoord);
     """)
 
-    def texture_upload__make():
+    def texture_upload__make(premultiplied=True):
         """Uses an odd-width subsurface so row pitch and the final short chunk are exercised."""
         import renpy.pygame as pygame
-        surface = pygame.Surface((2050, 1025), pygame.SRCALPHA, 32)
+        surface = pygame.Surface((2050, 1026), pygame.SRCALPHA, 32)
         surface.fill((64, 0, 0, 128))
         surface.fill((0, 128, 0, 128), (0, 511, 2050, 3))
         surface.fill((0, 0, 255, 255), (0, 1023, 2050, 2))
         surface = surface.subsurface((1, 0, 2049, 1025))
-        return renpy.display.draw.load_texture(surface, properties={"premultiplied": True, "mipmap": True})
+        return renpy.display.draw.load_texture(surface, properties={"premultiplied": premultiplied, "mipmap": True})
 
     def texture_upload__samples(texture):
         """Hashes the complete GPU output and samples both sides of the color bands."""
@@ -54,6 +54,24 @@ init python:
         samples = [tuple(surface.get_at((w // 2, min(h - 1, int(y * h / 1025)))))
                    for y in (0, 510, 511, 513, 514, 1023, 1024)]
         return hashlib.sha256(stream.getvalue()).hexdigest(), samples
+
+    def texture_upload__compare_pbo(chunk_size, premultiplied):
+        """Compare complete frames from direct and pixel unpack buffer uploads with the same source pitch."""
+        previous_size, previous_pbo = config.texture_upload_chunk_size, config.texture_upload_use_pbo
+        config.texture_upload_chunk_size = chunk_size
+        try:
+            config.texture_upload_use_pbo = True
+            texture = texture_upload__make(premultiplied)
+            texture.load()
+            buffered = texture_upload__samples(texture)
+            config.texture_upload_use_pbo = False
+            texture = texture_upload__make(premultiplied)
+            texture.load()
+            direct = texture_upload__samples(texture)
+            return direct == buffered and direct[1][0] != direct[1][-1]
+        finally:
+            config.texture_upload_chunk_size = previous_size
+            config.texture_upload_use_pbo = previous_pbo
 
     def texture_upload__begin():
         """Captures the first step before the interaction loop can finish queued work."""
@@ -102,6 +120,11 @@ testsuite texture_upload:
 
     after testcase:
         $ config.texture_upload_chunk_size = _upload_chunk_size
+
+    testcase direct_upload_matches_buffered_upload:
+        parameter chunk_size = [0, 256 * 1024]
+        parameter premultiplied = [True, False]
+        assert eval texture_upload__compare_pbo(chunk_size, premultiplied)
 
     testcase demand_finishes_a_partial_upload:
         $ _upload_texture, _upload_loaded = texture_upload__begin()

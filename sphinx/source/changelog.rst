@@ -160,6 +160,7 @@ rendering:
   Redrawing the screen no longer starves prediction.
 * When preloading images, decoding is now spread across multiple threads.
 * Texture uploads are now limited to a time budget each frame, to avoid hitches when many textures are loaded at once.
+* Desktop games can set :var:`config.texture_upload_use_pbo` to False to use direct software surface uploads.
 * A cache of OpenGL state is used to skip redundant state changes.
 * Mesh data that has not changed reuses existing GPU buffers, meshes are uploaded in bulk, and clipped meshes are
   cached.

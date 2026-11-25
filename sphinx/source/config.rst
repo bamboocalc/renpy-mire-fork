@@ -1816,6 +1816,13 @@ Showing Images
     its remaining steps finish before it is sampled; incomplete textures are
     never displayed. Configure this during init.
 
+.. var:: config.texture_upload_use_pbo = True
+
+    Desktop OpenGL renderers use pixel unpack buffers for software surface
+    uploads by default. Set this to False during init to submit the surface
+    pixels directly on drivers where that is faster. ANGLE and web already
+    use direct uploads. Mobile retains its existing upload path.
+
 .. var:: config.keep_running_transform = True
 
     If True, showing an image without supplying a transform or ATL
