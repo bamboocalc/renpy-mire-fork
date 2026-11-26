@@ -831,8 +831,6 @@ cdef class GL2Draw:
             self.quit_fbo()
             if full_reset:
                 self.shader_cache.clear()
-                # Freeing the program later would delete whatever reuses its number in the new context.
-                self.texture_loader.ftl_program = None
 
                 # Free the texture loader's program now, before any new program exists. If the context has been
                 # replaced, freeing it after the new context reuses its number would delete a new program.
