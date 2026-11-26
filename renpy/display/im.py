@@ -1165,9 +1165,9 @@ class Data(ImageBase):
     def _repr_info(self):
         return repr(self.filename)
 
-    def load(self):
-        f = io.BytesIO(self.data)
-        return renpy.display.pgrender.load_image(f, self.filename)
+    def load(self, *, copy=True):
+        with renpy.pygame.iostream.IOBuffer(self.data, name=self.filename) as stream:
+            return renpy.display.pgrender.load_image(stream, self.filename, copy=copy)
 
 
 class ZipFileImage(ImageBase):
@@ -1287,7 +1287,7 @@ class UnoptimizedTexture(ImageBase):
 
         # A RawTexture goes straight to the GPU, which never reads the border of a copied surface.
         # Subclasses that override load predate the copy argument.
-        if type(self.image).load is Image.load:
+        if type(self.image).load in (Image.load, Data.load):
             return self.image.load(copy=False)
 
         return self.image.load()

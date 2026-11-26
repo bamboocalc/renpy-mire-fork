@@ -255,6 +255,20 @@ def test_raw_texture_keeps_legacy_image_load_override():
     assert im.UnoptimizedTexture(Legacy("legacy.png"), premultiply=False).load() is surface
 
 
+def test_embedded_raw_texture_preserves_straight_alpha():
+    """Embedded textures decode directly to a surface with unchanged size and RGBA data."""
+    source = renpy.pygame.Surface((2, 1))
+    colors = [(20, 40, 60, 128), (80, 100, 120, 255)]
+    for x, color in enumerate(colors):
+        source.set_at((x, 0), color)
+    encoded = io.BytesIO()
+    renpy.pygame.image.save(source, encoded, "texture.png")
+    image = im.Data(encoded.getvalue(), "texture.png")
+    for surface in (image.load(), im.UnoptimizedTexture(image, premultiply=False).load()):
+        assert surface.get_size() == (2, 1)
+        assert [surface.get_at((x, 0)) for x in range(2)] == colors
+
+
 def test_qoi_decodes_without_the_unsafe_format_lock():
     """QOI textures decode in parallel with exact pixels; the unsafe-format lock would serialize the decode pool."""
     pixels = [(255, 0, 0, 255), (0, 255, 0, 128), (0, 0, 255, 0), (10, 20, 30, 40)]
