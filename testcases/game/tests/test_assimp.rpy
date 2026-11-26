@@ -1347,15 +1347,16 @@ testsuite assimp_reflection:
         assert eval assimp_alpha__close(_probe_pixel, assimp_pbr__expected((0, 0, 1)))
 
     testcase cached_probe:
-        description "Moving the camera reuses filtered maps and atlas storage; repeated frames retain identical pixels."
+        description "A shallow copy of a probe-lit scene renders identical pixels without allocating a second atlas."
 
         $ _probe = GLTFReflectionProbe(im.Null("#f00"), position=(200, 150, 0), box_min=(100, 50, -100), box_max=(300, 250, 100))
         $ _probe_scene = GLTFScene(assimp_alpha__camera(assimp_pbr__plane(u_material_metallicfactor=1.0, u_material_roughnessfactor=0.0)), light_color=(0, 0, 0), reflection_probes=(_probe,))
         $ _probe_before = assimp_shadow__sample(_probe_scene, 0)
         $ _probe_stats = renpy.display.draw.texture_loader.environment_cache.snapshot()
-        $ _probe_after = assimp_shadow__sample(_probe_scene, 1)
+        $ _probe_after = assimp_shadow__sample(_probe_scene._copy(), 1)
         assert eval _probe_after["hash"] == _probe_before["hash"]
         assert eval renpy.display.draw.texture_loader.environment_cache.snapshot()["hits"] > _probe_stats["hits"]
+        assert eval renpy.display.draw.texture_loader.environment_cache.snapshot()["retained_bytes"] == _probe_stats["retained_bytes"]
         assert eval renpy.display.draw.texture_loader.environment_cache.snapshot()["retained_bytes"] <= 64 * 1024 * 1024
 
     testcase box_parallax:

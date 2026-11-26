@@ -102,6 +102,9 @@ image_cache_size_mb = 400
 # Additional imported-model data retained after leaving prediction; textures have their own cache.
 gltf_model_cache_size_mb = 0
 
+# Binary GLTF files verified to have unique vertices and no degenerate faces.
+gltf_preprocessed_geometry = {}
+
 # Renderer-owned shadow targets, independent of saved scene state.
 gltf_shadow_cache_size_mb = 64
 

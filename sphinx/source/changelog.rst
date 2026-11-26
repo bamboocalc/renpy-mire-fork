@@ -304,6 +304,9 @@ Concurrent requests for the same model share the completed import. GLTFModels
 with the same file, `tangents`, and `zoom` share one import, even when they
 use different shaders.
 
+Verified static GLB files can skip redundant geometry processing with
+:var:`config.gltf_preprocessed_geometry`.
+
 When :var:`config.compressed_textures` is True, textures such as those of a
 GLTFModel load a BC7 KTX2 file with the same name in place of the image file,
 if the GPU supports BC7. The compressed data is uploaded without decoding, and

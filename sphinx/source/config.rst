@@ -1793,6 +1793,16 @@ Showing Images
     textures use the separate image cache controlled by
     :var:`config.image_cache_size_mb`.
 
+.. var:: config.gltf_preprocessed_geometry = {}
+
+    A mapping from GLB filenames to their lowercase SHA-256 hex digests. List
+    static GLBs with embedded geometry after verifying that skipping vertex
+    deduplication and degenerate-face detection produces the same imported
+    geometry. Those passes are skipped when the file matches its digest.
+    Changed files use the standard import. This setting applies to
+    :class:`GLTFModel` with ``scene``, ``material``, and ``tangents`` all disabled.
+    Set it during init.
+
 .. var:: config.gltf_shadow_cache_size_mb = 64
 
     The renderer's retention budget, in megabytes, for unchanged desktop

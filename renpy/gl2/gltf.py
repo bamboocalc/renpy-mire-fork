@@ -365,45 +365,53 @@ def collect_scene(root, width, height, imported=True):
     def descend(r, model, view, projection, uniforms, properties):
         if not isinstance(r, Render):
             return
-        props = dict(properties)
-        if r.properties:
-            props.update(r.properties)
-        if r.reverse is not None and r.matrix_kind == matrix_projection:
-            props["gltf_camera_projection"] = True
-        if r.properties and r.properties.get("gltf_scene", False):
+        local_properties = r.properties
+        if local_properties and local_properties.get("gltf_scene", False):
             return
-        values = dict(uniforms)
-        for key, value in (r.uniforms or {}).items():
-            if key in values and key in renpy.config.merge_uniforms:
-                values[key] = renpy.config.merge_uniforms[key](values[key], value)
-            else:
-                values[key] = value
-        for light, local in (r.properties or {}).get("gltf_lights", ()):
-            if imported or not (r.properties or {}).get("gltf_imported_lights", False):
+        reverse, kind = r.reverse, r.matrix_kind
+        props = properties | local_properties if local_properties else properties
+        if reverse is not None and kind == matrix_projection:
+            props = props | {"gltf_camera_projection": True}
+        values = uniforms
+        if r.uniforms:
+            values = dict(uniforms)
+            for key, value in r.uniforms.items():
+                if key in values and key in renpy.config.merge_uniforms:
+                    values[key] = renpy.config.merge_uniforms[key](values[key], value)
+                else:
+                    values[key] = value
+        if local_properties and (imported or not local_properties.get("gltf_imported_lights", False)):
+            for light, local in local_properties.get("gltf_lights", ()):
                 matrix = model * local
                 position = matrix.transform(*light.position, components=3)
                 direction = (matrix.transform(*light.direction, w=0, components=3)
                     if light.kind != "point" else light.direction)
                 lights.append((light, vector(position, "light position"), unit(direction)))
 
-        def transformed(offset):
-            m = model * offset
-            if r.reverse is not None:
-                m = m * r.reverse
-            v, p = view, projection
-            if r.reverse is not None:
-                if r.matrix_kind == matrix_projection:
-                    p, v, m = p * v * m, identity, identity
-                elif r.matrix_kind == matrix_view:
-                    v, m = v * m, identity
-            return m, v, p
+        def transformed(x=0, y=0):
+            m = model * Matrix.offset(x, y, 0) if x or y else model
+            if reverse is None:
+                return m, view, projection
+            m = m * reverse
+            if kind == matrix_projection:
+                return identity, identity, projection * view * m
+            if kind == matrix_view:
+                return identity, view * m, projection
+            return m, view, projection
 
         if isinstance(r.mesh, renpy.gl2.gl2mesh3.Mesh3):
-            m, v, p = transformed(identity)
+            m, v, p = transformed()
             meshes.append((r, m, v, p, values, props))
             return
+        # Models and their meshes usually share the same zero-offset transform.
+        centered = None
         for child, x, y, _focus, _main in r.children:
-            m, v, p = transformed(Matrix.offset(x, y, 0))
+            if x or y:
+                m, v, p = transformed(x, y)
+            else:
+                if centered is None:
+                    centered = transformed()
+                m, v, p = centered
             descend(child, m, v, p, values, props)
 
     descend(root, identity, identity, Matrix.texture_projection(max(width, 1), max(height, 1)), {}, {})

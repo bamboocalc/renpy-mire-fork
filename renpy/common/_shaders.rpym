@@ -1034,6 +1034,12 @@ init python:
         float nv = max(uv.x, 0.00001);
         vec3 V = vec3(sqrt(max(1.0 - nv * nv, 0.0)), 0.0, nv);
         int samples = int(clamp(u_gltf_filter_samples, 64.0, 256.0));
+        // Constant radiance needs no integration. The last band still stores the BRDF lookup.
+        if (band <= 6.5 && res0 == vec2(1.0)) {
+            sum = textureLod(tex0, vec2(0.5), 0.0).rgb;
+            weight_sum = 1.0;
+            samples = 0;
+        }
         for (int i = 0; i < 256; ++i) {
             if (i >= samples) break;
             int bits = i;

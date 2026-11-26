@@ -24,6 +24,7 @@ import array
 import base64
 import collections
 import functools
+import hashlib
 import json
 import math
 import struct
@@ -36,7 +37,7 @@ cimport cython
 
 from typing import Iterable, Literal
 
-from renpy.pygame.iostream cimport open_io
+from renpy.pygame.iostream cimport IOFileLike, open_io
 from renpy.pygame.sdl cimport SDL_IOStream
 
 from assimpapi cimport (
@@ -49,6 +50,7 @@ from assimpapi cimport (
     aiProcess_ValidateDataStructure,
     aiProcess_SplitLargeMeshes,
     aiProcess_FindDegenerates,
+    aiProcess_JoinIdenticalVertices,
 
     aiScene,
     aiMesh,
@@ -750,6 +752,42 @@ def _pack_skin(Py_ssize_t count, Py_ssize_t sets, const double[::1] joints, cons
     return starts, indices[:filled], normalized[:filled], max_joint
 
 
+cdef str _preprocessed_geometry_digest(file):
+    # Reduce read and GIL handoffs while the prediction thread hashes a large bake.
+    buffer = memoryview(bytearray(2 * 1024 * 1024))
+    digest = hashlib.sha256()
+    while count := file.readinto(buffer):
+        digest.update(buffer[:count])
+    return digest.hexdigest()
+
+
+class _ImportFileView:
+    """Keep an independent cursor on the primary file held open by the loader."""
+
+    def __init__(self, file):
+        self.file = file
+        self.position = 0
+
+    def readable(self):
+        return True
+
+    def tell(self):
+        return self.position
+
+    def seek(self, offset, whence=0):
+        if whence == 1:
+            offset += self.position
+            whence = 0
+        self.position = self.file.seek(offset, whence)
+        return self.position
+
+    def readinto(self, buffer):
+        self.file.seek(self.position)
+        count = self.file.readinto(buffer)
+        self.position += count
+        return count
+
+
 cdef class Loader:
 
     cdef public str dirname
@@ -784,6 +822,7 @@ cdef class Loader:
     "The name of the file being loaded."
 
     cdef public object import_data
+    cdef public object import_file
 
     cdef public list material_map
     "Document material indices by Assimp material index; Assimp's default maps past the authored materials."
@@ -854,12 +893,24 @@ cdef class Loader:
                 document["materials"] = [dict(m, name=n) for m, n in zip(materials, names)]
             self.import_data = renpy.gl2.gltfscene.import_bytes(document, filename)
 
-        # File callbacks reacquire the GIL; native import and postprocessing need not hold it.
         try:
+            if not (scene or material or tangents) and filename.lower().endswith(".glb"):
+                expected = renpy.config.gltf_preprocessed_geometry.get(filename)
+                if expected is not None:
+                    # Keep the same file open across verification and import, including files in archives.
+                    self.import_file = renpy.loader.load(filename)
+                    if _preprocessed_geometry_digest(self.import_file) == expected:
+                        flags &= ~(aiProcess_JoinIdenticalVertices | aiProcess_FindDegenerates)
+
+            # File callbacks reacquire the GIL; native import and postprocessing need not hold it.
             with nogil:
                 self.scene = assimpio_import(filename_c, flags)
         finally:
             self.import_data = None
+            if self.import_file is not None:
+                file = self.import_file
+                self.import_file = None
+                file.close()
 
         if not self.scene:
             self.document = { }
@@ -2572,19 +2623,21 @@ class GLTFScene(Displayable):
         scene.add_property("texture_scaling_tex_environment", (renpy.uguu.GL_LINEAR, renpy.uguu.GL_LINEAR))
         if self.environment is not None or self.reflection_probes or any("renpy.gltf.sheen" in record[0].shaders for record in meshes):
             model = self.environment or self.environment_fallback or _environment_model(renpy.display.im.Null("#000"), self.environment_quality)
-            maps = [_environment_render(i, st, at) for i in (model,) + self.reflection_models]
-            environment = maps[0]
             if self.reflection_probes:
                 cache = renpy.display.draw.texture_loader.environment_cache
-                owner = cache.owner(self)
-                signature = (cache.owner(model), tuple(cache.owner(i) for i in self.reflection_models), self.environment_quality)
+                # Copies of the scene share their environment models and can use the same atlas.
+                owner = cache.owner(model)
+                signature = (tuple(cache.owner(i) for i in self.reflection_models), self.environment_quality)
                 environment = cache.get(owner, "atlas", signature)
                 if environment is None:
+                    maps = [_environment_render(i, st, at) for i in (model,) + self.reflection_models]
                     environment = Render(model.size[0] * len(maps), model.size[1])
                     for i, image in enumerate(maps):
                         environment.blit(image, (model.size[0] * i, 0))
                     environment.add_property("gltf_target", {"hdr": True, "mipmap": False, "drawable_resolution": False})
                     environment.add_property("gltf_target_store", (cache, (cache.epoch, owner, "atlas", signature)))
+            else:
+                environment = _environment_render(model, st, at)
         else:
             environment = render_for_texture(
                 renpy.display.im.UnoptimizedTexture(renpy.display.im.Null("#000"), premultiply=False), 1, 1, st, at)
@@ -2815,7 +2868,9 @@ cdef public SDL_IOStream *assimp_load(const char *filename) nogil:
         fn = filename.decode("utf-8", "replace")
 
         try:
-            if loader.import_data is not None and fn.replace("\\", "/") == loader.filename.replace("\\", "/"):
+            if (loader.import_file is not None or loader.import_data is not None) and fn.replace("\\", "/") == loader.filename.replace("\\", "/"):
+                if loader.import_file is not None:
+                    return IOFileLike(_ImportFileView(loader.import_file)).take()
                 import io
                 f = io.BytesIO(loader.import_data)
             else:

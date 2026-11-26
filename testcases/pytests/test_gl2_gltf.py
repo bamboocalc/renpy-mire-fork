@@ -19,9 +19,12 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+import hashlib
 import itertools
+import json
 import math
 import pickle
+import struct
 from types import SimpleNamespace
 
 import pytest
@@ -30,6 +33,39 @@ import renpy
 from renpy.display.matrix import Matrix
 from renpy.display.render import Render
 from renpy.gl2 import assimp, gltf
+
+
+@pytest.mark.parametrize("matching_digest", [False, True])
+def test_preprocessed_glb_requires_current_digest(tmp_path, mocker, matching_digest):
+    """Re-exported geometry still gets deduplicated even when its filename is allowlisted."""
+    # Two triangles with six authored positions and four unique vertices.
+    positions = struct.pack("<18f", 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0)
+    doc = json.dumps({
+        "asset": {"version": "2.0"},
+        "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 6, "type": "VEC3",
+                       "min": [0, 0, 0], "max": [1, 1, 0]}],
+        "bufferViews": [{"buffer": 0, "byteLength": len(positions)}],
+        "buffers": [{"byteLength": len(positions)}],
+    }).encode()
+    doc += b" " * (-len(doc) % 4)
+    data = (
+        struct.pack("<4sIII4s", b"glTF", 2, 28 + len(doc) + len(positions), len(doc), b"JSON")
+        + doc + struct.pack("<I4s", len(positions), b"BIN\0") + positions
+    )
+    name = "preprocessed-geometry.glb"
+    (tmp_path / name).write_bytes(data)
+    mocker.patch.object(renpy.config, "basedir", str(tmp_path))
+    mocker.patch.object(renpy.config, "searchpath", [""])
+    mocker.patch.object(renpy.loader, "loadable_cache", {})
+    mocker.patch.object(assimp, "cache", type(assimp.cache)())
+    digest = hashlib.sha256(data if matching_digest else b"old export").hexdigest()
+    mocker.patch.object(renpy.config, "gltf_preprocessed_geometry", {name: digest})
+
+    model = assimp.GLTFModel(name, shader="renpy.texture", zoom=1, tangents=False).load()
+
+    assert len(model.mesh_info[0].mesh.get_points()) == (6 if matching_digest else 4)
 
 
 @pytest.mark.parametrize("options", [
