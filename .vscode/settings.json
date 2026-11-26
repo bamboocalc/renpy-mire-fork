@@ -46,6 +46,7 @@
         "**/*.rpa": true,
         "**/*.rpymc": true,
         "**/cache/": true,
+        "game/cache/": true,
         "renpy/audio/filter.pyi": true,
         "renpy/audio/renpysound.pyi": true,
         "renpy/display/accelerator.pyi": true,
@@ -65,6 +66,7 @@
         "renpy/gl2/gl2statecache.pyi": true,
         "renpy/gl2/gl2texture.pyi": true,
         "renpy/gl2/gl2uniform.pyi": true,
+        "renpy/gl2/live2dmodel.pyi": true,
         "renpy/pydict.pyi": true,
         "renpy/pygame/color.pyi": true,
         "renpy/pygame/controller.pyi": true,
@@ -104,8 +106,7 @@
         "renpy/text/texwrap.pyi": true,
         "renpy/tfd.pyi": true,
         "renpy/uguu/gl.pyi": true,
-        "renpy/uguu/uguu.pyi": true,
-        "game/cache/": true
+        "renpy/uguu/uguu.pyi": true
     },
     "renpy.excludeCompiledFilesFromWorkspace": true,
     "renpy.watchFoldersForChanges": false,
