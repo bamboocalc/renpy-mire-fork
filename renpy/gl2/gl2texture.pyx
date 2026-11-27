@@ -96,19 +96,17 @@ cdef class TextureLoader:
             "allocation_seconds": 0.0, "allocation_max_seconds": 0.0 }
 
     def init(self):
+        """
+        Prepares this loader to load textures into the current context. This is
+        called after the context is created, and after each full reset. It
+        keeps track of existing textures, which new_context forgets if the
+        context was replaced.
+        """
+
         self.shadow_cache.clear()
         self.environment_cache.clear()
 
-        if self.allocated:
-            self.quit()
-
         self.ftl_program = self.draw.shader_cache.get(("renpy.ftl",))
-
-        self.allocated = set()
-        self.free_list = [ ]
-        self.total_texture_size = 0
-        self.texture_load_queue = weakref.WeakSet()
-        self.generation += 1
 
         self.max_anisotropy = 1.0
         glGetFloatv(MAX_TEXTURE_MAX_ANISOTROPY_EXT, &self.max_anisotropy)
@@ -131,6 +129,35 @@ cdef class TextureLoader:
             self.compressed_formats = { 145, 146 }
         else:
             self.compressed_formats = set()
+
+    def new_context(self):
+        """
+        Called right after the OpenGL context has been replaced, once the
+        textures that could be freed have been deleted in the old context.
+
+        Forgets the texture numbers of the old context without deleting them, as
+        the old textures are gone and their numbers may name textures in the new
+        context.
+        """
+
+        self.generation += 1
+
+        self.allocated = set()
+        self.free_list = [ ]
+        self.total_texture_size = 0
+
+        self.shadow_cache.clear()
+        self.environment_cache.clear()
+
+        self.dequeue_textures()
+
+    def dequeue_textures(self):
+        """
+        Empties the queue of textures to load ahead of time. A texture still
+        waiting to be loaded is loaded when it's drawn instead.
+        """
+
+        self.texture_load_queue = weakref.WeakSet()
 
     def quit(self):
         """
@@ -296,9 +323,16 @@ cdef class TextureLoader:
     def cleanup(self):
         """
         This is called once per frame, to free textures that are no longer used.
+
+        With no OpenGL context current, the deletions couldn't take effect, so
+        the textures stay queued: they're deleted once the context is current
+        again, or forgotten by new_context if it was replaced.
         """
 
         cdef GLuint texnums[1]
+
+        if self.free_list and SDL_GL_GetCurrentContext() == NULL:
+            return
 
         for texture_number, _storage in self.free_list:
             texnums[0] = texture_number
@@ -394,9 +428,8 @@ cdef class GLTexture(GL2Model):
         if renpy.emscripten and generate:
             # Generate a texture name to access video frames for web
             glGenTextures(1, &number)
-            self.number = number
+            self.set_number(number)
             self.loaded = True
-            self.loader.allocated.add(self.number)
             self.mesh = Mesh2.texture_rectangle(
                 0.0, 0.0, width, height,
                 0.0, 0.0, 1.0, 1.0,
@@ -572,7 +605,7 @@ cdef class GLTexture(GL2Model):
         glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data)
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4)
 
-        self.number = texture
+        self.set_number(texture)
         self.width = width
         self.height = height
         self.texture_width = width
@@ -583,7 +616,6 @@ cdef class GLTexture(GL2Model):
             "movie_yuv_components": 2 if two_components else 1,
         }
         self.mesh = Mesh2.texture_rectangle(0.0, 0.0, width, height, 0.0, 0.0, 1.0, 1.0)
-        self.loader.allocated.add(texture)
         texture_size = width * height * self.properties["movie_yuv_components"]
         if mipmap:
             texture_size = int(texture_size * 1.34)
@@ -707,8 +739,7 @@ cdef class GLTexture(GL2Model):
 
         self.mipmap_texture(premultiplied, tw, th, properties)
 
-        self.number = premultiplied
-        self.loader.allocated.add(self.number)
+        self.set_number(premultiplied)
 
         self.loaded = True
 
@@ -755,7 +786,7 @@ cdef class GLTexture(GL2Model):
             glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, tw, th, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL)
 
         rv = Texture((self.width, self.height), self.loader)
-        rv.number = number
+        (<GLTexture> rv).set_number(number)
         rv.loaded = True
         rv.texture_width = tw
         rv.texture_height = th
@@ -765,7 +796,6 @@ cdef class GLTexture(GL2Model):
         # Depth formats aren't filterable on OpenGL ES 3.
         rv.mag_filter = rv.min_filter = rv.default_mag_filter = rv.default_min_filter = GL_NEAREST
 
-        self.loader.allocated.add(number)
         self.loader.total_texture_size += tw * th * 4
 
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, number, 0)
@@ -790,7 +820,7 @@ cdef class GLTexture(GL2Model):
 
     def load_gltexture(GLTexture self):
         """
-        Loads this texture. When it's loaded, generation and number are set,
+        Loads this texture. When it's loaded, number and generation are set,
         and the texture is ready to use.
         """
 
@@ -872,15 +902,14 @@ cdef class GLTexture(GL2Model):
         glDeleteTextures(1, &tex)
 
         # Store the loaded texture.
-        self.number = premultiplied
-        self.loader.allocated.add(self.number)
+        self.set_number(premultiplied)
 
         self.loaded = True
         self.surface = None
 
     def load_gltexture_premultiplied(GLTexture self, partial=False):
         """
-        Loads this texture. When it's loaded, generation and number are set,
+        Loads this texture. When it's loaded, number and generation are set,
         and the texture is ready to use.
         """
 
@@ -976,8 +1005,7 @@ cdef class GLTexture(GL2Model):
         self.mipmap_texture(premultiplied, self.width, self.height, self.properties)
 
         # Store the loaded texture.
-        self.number = premultiplied
-        self.loader.allocated.add(self.number)
+        self.set_number(premultiplied)
 
         self.loaded = True
         self.surface = None
@@ -1120,6 +1148,16 @@ cdef class GLTexture(GL2Model):
         self.min_filter = GL_LINEAR_MIPMAP_NEAREST
         self.default_min_filter = self.min_filter
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, self.min_filter)
+
+    cdef void set_number(GLTexture self, GLuint number):
+        """
+        Records `number` as the OpenGL texture this object represents, created
+        in the loader's current generation.
+        """
+
+        self.number = number
+        self.generation = self.loader.generation
+        self.loader.allocated.add(number)
 
     def __del__(self):
         try:

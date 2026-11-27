@@ -178,7 +178,7 @@ testsuite texture_context_reset:
         description "A texture and upload program from before a GL context reset free nothing that the new context reuses."
 
         $ _reset_old = texture_reset__make((255, 0, 0, 255))
-        $ renpy.display_reset()
+        run Function(test_gl2draw__force_new_context)
         pause 0.2
         $ _reset_new = texture_reset__make((0, 0, 255, 255))
         $ _reset_size = renpy.display.draw.texture_loader.get_texture_size()

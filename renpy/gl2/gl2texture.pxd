@@ -31,20 +31,22 @@ cdef class TextureLoader:
     cdef GL2Draw draw
 
     # All the texture number currently allocated by this loader.
-    cdef set allocated
+    cdef readonly set allocated
 
     # A list of (number, storage) pairs for textures that need to be freed.
-    cdef list free_list
+    cdef readonly list free_list
+
+    # Increases each time the OpenGL context is replaced. A texture
+    # is only freed if it was created in the current generation, so a texture
+    # that outlives its context can't delete a texture in the new one.
+    cdef public unsigned long long generation
 
     # The total size (in bytes) of all the textures that have been allocated
     # but not deallocated.
-    cdef object total_texture_size
+    cdef readonly object total_texture_size
 
     # The program used for fast texture loading
     cdef Program ftl_program
-
-    # Incremented by init(), which forgets every texture number allocated before it.
-    cdef int generation
 
     # The queue of textures that need to be loaded.
     cdef object texture_load_queue
@@ -71,14 +73,14 @@ cdef class GLTexture(GL2Model):
     # The number of the texture in OpenGL.
     cdef public unsigned int number
 
-    # The loader generation that owns number.
-    cdef int generation
-
     # Describes a render target's storage if another target may reuse it once freed, or None.
     cdef object storage
 
     # Has this texture been loaded yet?
     cdef public bint loaded
+
+    # The loader generation the texture number was created in.
+    cdef public unsigned long long generation
 
     # If we are doing in-place loading, this is the data that's used for
     # that.
@@ -95,6 +97,8 @@ cdef class GLTexture(GL2Model):
 
     # The depth texture captured with this texture when it was rendered with depth_texture, or None.
     cdef public object depth_texture
+
+    cdef void set_number(GLTexture self, GLuint number)
 
     # The width and height of the texture. (Which may be a different size
     # than the model, if the texture is being rendered in the drawable
