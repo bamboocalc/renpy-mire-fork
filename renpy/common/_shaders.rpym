@@ -1006,6 +1006,7 @@ init python:
         uniform sampler2D tex0;
         uniform vec2 res0;
         uniform float u_gltf_filter_samples;
+        uniform float u_gltf_filter_region;
         in vec2 a_tex_coord;
         out vec2 v__uv;
     """, vertex_200="""
@@ -1019,6 +1020,8 @@ init python:
         }
     """, fragment_200="""
         float band = floor(v__uv.y * 8.0);
+        if ((u_gltf_filter_region > 0.5 && u_gltf_filter_region < 1.5 && band > 6.5)
+            || (u_gltf_filter_region > 1.5 && band <= 6.5)) discard;
         vec2 uv = vec2(v__uv.x, fract(v__uv.y * 8.0));
         float longitude = (uv.x - 0.5) * 6.28318530718;
         float latitude = uv.y * 3.14159265359;

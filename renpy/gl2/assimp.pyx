@@ -2265,13 +2265,35 @@ def _environment_model(environment, quality):
     width, samples = settings[quality]
     model = (renpy.display.model.Model(size=(width, width * 4)).shader("renpy.gltf.environment")
         .property("drawable_resolution", False).property("mipmap", False)
-        .uniform("u_gltf_filter_samples", float(samples)))
+        .uniform("u_gltf_filter_samples", float(samples)).uniform("u_gltf_filter_region", 0.0))
     model.textures.append(renpy.display.model.Texture(image, False, False, False,
         (renpy.uguu.GL_REPEAT, renpy.uguu.GL_CLAMP_TO_EDGE), False))
     return model
 
 
-def _environment_render(model, st, at):
+class _EnvironmentLookup(Displayable):
+    """Keep a pending lookup render shareable without saving renderer-owned cache tokens."""
+
+    def __init__(self, model, signature):
+        super().__init__()
+        self.model = model._copy()
+        self.model.uniforms = dict(model.uniforms, u_gltf_filter_region=2.0)
+        self.signature = signature
+
+    def visit(self):
+        return [self.model]
+
+    def render(self, width, height, st, at):
+        cache = renpy.display.draw.texture_loader.environment_cache
+        rv = Render(*self.model.size)
+        rv.blit(renpy.display.render.render(self.model, *self.model.size, st, at), (0, 0))
+        rv.add_property("gltf_target", {"hdr": True, "mipmap": False, "drawable_resolution": False})
+        rv.add_property("gltf_target_store", (cache, (cache.epoch, cache.owner(cache),
+            ("lookup", self.signature), self.signature)))
+        return rv
+
+
+def _environment_render(model, st, at, shared_lookup=False):
     """Retain GPU results on the renderer, never Render objects or native textures on saved scenes."""
     cache = renpy.display.draw.texture_loader.environment_cache
     owner = cache.owner(model)
@@ -2280,7 +2302,31 @@ def _environment_render(model, st, at):
     if cached is not None:
         return cached
     rv = Render(*model.size)
-    rv.blit(renpy.display.render.render(model, *model.size, st, at), (0, 0))
+    # Older saved models have no region uniform and must still select the full filter.
+    rv.add_uniform("u_gltf_filter_region", 0.0)
+    if shared_lookup and model.size[0] * model.size[1] * 8 <= cache.limit:
+        lookup_signature = (model.size, model.uniforms["u_gltf_filter_samples"])
+        slot = ("lookup", lookup_signature)
+        lookup = cache.get(cache.owner(cache), slot, lookup_signature)
+        if lookup is None:
+            if not hasattr(cache, "environment_pending"):
+                cache.environment_pending = weakref.WeakValueDictionary()
+            key = (cache.epoch, lookup_signature)
+            pending = cache.environment_pending.get(key)
+            if pending is None:
+                pending = _EnvironmentLookup(model, lookup_signature)
+                cache.environment_pending[key] = pending
+            lookup = renpy.display.render.render(pending, *model.size, st, at)
+        radiance = model._copy()
+        radiance.uniforms = dict(model.uniforms, u_gltf_filter_region=1.0)
+        rv.blit(renpy.display.render.render(radiance, *model.size, st, at), (0, 0))
+        sample = Render(*model.size)
+        sample.mesh = True
+        sample.add_shader("renpy.texture")
+        sample.blit(lookup, (0, 0))
+        rv.blit(sample, (0, 0))
+    else:
+        rv.blit(renpy.display.render.render(model, *model.size, st, at), (0, 0))
     rv.add_property("gltf_target", {"hdr": True, "mipmap": False, "drawable_resolution": False})
     rv.add_property("gltf_target_store", (cache, (cache.epoch, owner, "filtered", signature)))
     return rv
@@ -2630,7 +2676,7 @@ class GLTFScene(Displayable):
                 signature = (tuple(cache.owner(i) for i in self.reflection_models), self.environment_quality)
                 environment = cache.get(owner, "atlas", signature)
                 if environment is None:
-                    maps = [_environment_render(i, st, at) for i in (model,) + self.reflection_models]
+                    maps = [_environment_render(i, st, at, shared_lookup=True) for i in (model,) + self.reflection_models]
                     environment = Render(model.size[0] * len(maps), model.size[1])
                     for i, image in enumerate(maps):
                         environment.blit(image, (model.size[0] * i, 0))

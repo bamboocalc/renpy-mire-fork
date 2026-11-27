@@ -21,6 +21,22 @@
 
 init python:
 
+    def assimp_reflection__filter(image, quality, shared, old=False):
+        """Read every filtered texel through the HDR target, including an old saved model's missing uniform."""
+        import hashlib
+        import pickle
+        from renpy.gl2 import assimp
+        model = assimp._environment_model(im.Null("#fff") if image == "constant" else image, quality)
+        if old:
+            model.uniforms.pop("u_gltf_filter_region", None)
+            model = pickle.loads(pickle.dumps(model))
+        width, height = model.size
+        sample = renpy.Render(width, height)
+        sample.mesh = True
+        sample.add_shader("renpy.texture")
+        sample.blit(assimp._environment_render(model, 0, 0, shared_lookup=shared), (0, 0))
+        return hashlib.sha256(renpy.render_to_surface(sample, width, height).get_buffer()).hexdigest()
+
     renpy.register_shader("assimp_baked.depth", glsl=300, variables="""
         uniform vec4 u_baked_test_color;
     """, fragment_200="""
@@ -1311,9 +1327,41 @@ testsuite assimp_layered_material:
 
 testsuite assimp_reflection:
 
+    before testcase:
+        $ _probe_cache_limit = renpy.display.draw.texture_loader.environment_cache.limit
+
     after testcase:
+        $ renpy.display.draw.texture_loader.environment_cache.limit = _probe_cache_limit
+        $ renpy.display.draw.texture_loader.environment_cache.clear()
         if not screen "main_menu":
             run MainMenu(confirm=False, save=False)
+
+    testcase shared_lookup_pixels:
+        parameter quality = ["low", "medium", "high"]
+        parameter image = ["constant", "models/material-environment.png", "models/material-environment.hdr"]
+        parameter old = [False, True]
+        description "A shared lookup preserves every RGBA texel for constant, LDR, HDR, and old saved filter models."
+
+        $ renpy.display.draw.texture_loader.environment_cache.clear()
+        $ _probe_reference = assimp_reflection__filter(image, quality, False, old)
+        $ renpy.display.draw.texture_loader.environment_cache.clear()
+        $ _probe_shared = assimp_reflection__filter(image, quality, True, old)
+        assert eval _probe_shared == _probe_reference
+
+    testcase shared_lookup_budget:
+        parameter budget = [0, 1024, 64 * 1024 * 1024]
+        description "Cold and reset lookups preserve the full filter under both constrained and normal cache budgets."
+
+        $ renpy.display.draw.texture_loader.environment_cache.limit = budget
+        $ renpy.display.draw.texture_loader.environment_cache.clear()
+        $ _probe_reference = assimp_reflection__filter("models/material-environment.png", "high", False)
+        $ renpy.display.draw.texture_loader.environment_cache.clear()
+        $ _probe_shared = assimp_reflection__filter("models/material-environment.png", "high", True)
+        assert eval _probe_shared == _probe_reference
+        assert eval renpy.display.draw.texture_loader.environment_cache.snapshot()["retained_bytes"] <= budget
+        $ renpy.display.draw.texture_loader.environment_cache.clear()
+        $ _probe_reset = assimp_reflection__filter("models/material-environment.png", "high", True)
+        assert eval _probe_reset == _probe_reference
 
     testcase local_probe:
         parameter quality = ["low", "medium", "high"]
@@ -1358,6 +1406,10 @@ testsuite assimp_reflection:
         assert eval renpy.display.draw.texture_loader.environment_cache.snapshot()["hits"] > _probe_stats["hits"]
         assert eval renpy.display.draw.texture_loader.environment_cache.snapshot()["retained_bytes"] == _probe_stats["retained_bytes"]
         assert eval renpy.display.draw.texture_loader.environment_cache.snapshot()["retained_bytes"] <= 64 * 1024 * 1024
+        run Function(test_gl2draw__force_new_context)
+        pause 0.1
+        $ _probe_reset = assimp_shadow__sample(_probe_scene, 2)
+        assert eval _probe_reset["hash"] == _probe_before["hash"]
 
     testcase box_parallax:
         parameter capture_x = [200, 100]
