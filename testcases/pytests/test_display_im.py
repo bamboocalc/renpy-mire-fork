@@ -509,6 +509,55 @@ def test_demand_finishes_each_tile_of_a_large_image(cache, draw):
     draw.ready_one_texture.assert_not_called()
 
 
+@pytest.mark.parametrize("decode_fails", [False, True])
+def test_prediction_refills_workers_while_a_slow_image_finishes(mocker, cache, decode_fails):
+    """A held decode must not leave another worker idle with predicted images still queued.
+
+    Events hold one real image load until the last queued image starts, making the scheduling order independent
+    of decode speed. The other images use the normal cache and mocked GPU boundary from this module's fixtures.
+    """
+
+    images = [im.Null((i, 0, 0, 255)) for i in range(5)]
+    started, release, _calls = slow_loader(mocker, images[0])
+    tail_started = threading.Event()
+    original = images[-1].load
+
+    def load_tail():
+        tail_started.set()
+        return original()
+
+    mocker.patch.object(images[-1], "load", side_effect=load_tail)
+    if decode_fails:
+        mocker.patch.object(images[1], "load", side_effect=ValueError("bad image"))
+    mocker.patch("renpy.gl2.assimp.preload")
+    cache.cache_limit = 1024
+    cache.decode_pool_workers = 2
+    for image in images:
+        cache.preload_image(image)
+
+    with ThreadPoolExecutor(max_workers=2) as pool, ThreadPoolExecutor(max_workers=1) as caller:
+        mocker.patch.object(cache, "get_decode_pool", return_value=pool)
+        future = caller.submit(lambda: list(cache.preload_thread_pass()))
+        try:
+            assert started.wait(5)
+            refilled_before_release = tail_started.wait(2)
+        finally:
+            release.set()
+        future.result(5)
+
+    assert refilled_before_release
+
+
+def test_prediction_preserves_worker_control_flow(mocker, cache):
+    """A script control-flow exception is propagated rather than blacklisted as a corrupt image."""
+
+    cache.decode_pool_workers = 2
+    cache.preload_image(im.Null())
+    mocker.patch.object(cache, "preload_texture", side_effect=renpy.game.JumpException("target"))
+    with ThreadPoolExecutor(max_workers=2) as pool, pytest.raises(renpy.game.JumpException, match="target"):
+        cache._preload_thread_pass_parallel(pool)
+
+
 def test_prediction_waits_for_the_last_decode_batch_and_new_requests(mocker, cache):
     """An empty input queue is not completion while its last batch or a newer prediction request is pending."""
 
